@@ -264,163 +264,7 @@ class SQLTableManager:
         
         return None
     
-    def _process_select(self, sql_statement):
-        """
-        Procesa una instrucción SELECT y ejecuta la búsqueda.
-        Versión actualizada que soporta rangos y atributos específicos.
-        
-        Args:
-            sql_statement (str): La instrucción SQL SELECT.
-            
-        Returns:
-            dict: Información del select procesado, incluyendo resultados.
-        """
-        select_info = self.parse_sql_select(sql_statement)
-        
-        # Si hubo error en el parsing, retornarlo directamente
-        if select_info.get('error', False):
-            print(f"Error en SELECT: {select_info['message']}")
-            return select_info
-        
-        table_name = select_info['table_name']
-        lista_busquedas = select_info['lista_busquedas']
-        lista_rangos = select_info['lista_rangos']
-        requested_attributes = select_info['requested_attributes']
-        
-        # Ejecutar la consulta si hay un gestor de almacenamiento
-        if table_name in self.storage_managers:
-            storage_manager = self.storage_managers[table_name]
-            
-            try:
-                # Ejecutar el select con listas de búsquedas y rangos
-                resultado = storage_manager.select(
-                    lista_busquedas=lista_busquedas if lista_busquedas else None,
-                    lista_rangos=lista_rangos if lista_rangos else None,
-                    requested_attributes=requested_attributes
-                )
-                
-                #storage_manager.print_select_results(resultado, f"SELECT en {table_name}")
-                
-                return {
-                    'error': False,
-                    'table_name': table_name,
-                    'lista_busquedas': lista_busquedas,
-                    'lista_rangos': lista_rangos,
-                    'requested_attributes': requested_attributes,
-                    'resultado': resultado
-                }
-                
-            except Exception as e:
-                error_result = {
-                    'error': True,
-                    'message': f"Error al ejecutar SELECT en tabla '{table_name}': {str(e)}"
-                }
-                print(f"Error: {error_result['message']}")
-                return error_result
-        else:
-            error_result = {
-                'error': True,
-                'message': f"No hay un gestor de almacenamiento para la tabla '{table_name}'"
-            }
-            print(f"Error: {error_result['message']}")
-            return error_result
     
-    def _process_delete(self, sql_statement):
-        """
-        Procesa una instrucción DELETE FROM y ejecuta la eliminación.
-        
-        Args:
-            sql_statement (str): La instrucción SQL DELETE FROM.
-            
-        Returns:
-            dict: Información del delete procesado, incluyendo resultados.
-        """
-        delete_info = self.parse_sql_delete(sql_statement)
-        
-        # Si hubo error en el parsing, retornarlo directamente
-        if delete_info.get('error', False):
-            print(f"Error en DELETE: {delete_info['message']}")
-            return delete_info
-        
-        table_name = delete_info['table_name']
-        lista_busquedas = delete_info['lista_busquedas']
-        lista_rangos = delete_info['lista_rangos']
-        
-        print(f"Procesando DELETE en tabla: {table_name}")
-        if lista_busquedas:
-            print(f"Condiciones exactas: {lista_busquedas}")
-        if lista_rangos:
-            print(f"Condiciones de rango: {lista_rangos}")
-        
-        # Verificar que la tabla existe
-        if table_name not in self.tables:
-            error_result = {
-                'error': True,
-                'message': f"La tabla '{table_name}' no existe"
-            }
-            print(f"Error: {error_result['message']}")
-            return error_result
-        
-        # Ejecutar la eliminación si hay un gestor de almacenamiento
-        if table_name in self.storage_managers:
-            storage_manager = self.storage_managers[table_name]
-            
-            try:
-                # Primero, encontrar los registros que cumplen las condiciones
-                print("Buscando registros que cumplen las condiciones...")
-                resultado_busqueda = storage_manager.select(
-                    lista_busquedas=lista_busquedas if lista_busquedas else None,
-                    lista_rangos=lista_rangos if lista_rangos else None
-                )
-                
-                if resultado_busqueda.get('error', False):
-                    print(f"Error al buscar registros para eliminar: {resultado_busqueda.get('message', 'Error desconocido')}")
-                    return resultado_busqueda
-                
-                records_to_delete = resultado_busqueda.get('numeros_registro', [])
-                
-                if not records_to_delete:
-                    print("No se encontraron registros que cumplan las condiciones para eliminar")
-                    return {
-                        'error': False,
-                        'table_name': table_name,
-                        'records_deleted': [],
-                        'count': 0,
-                        'message': 'No se encontraron registros para eliminar'
-                    }
-                
-                print(f"Se encontraron {len(records_to_delete)} registros para eliminar: {records_to_delete}")
-                
-                # Eliminar los registros usando el método delete_records del storage manager
-                deleted_count = storage_manager.delete_records(records_to_delete)
-                
-                success_message = f'Se eliminaron {deleted_count} registro(s) exitosamente'
-                print(f"✅ {success_message}")
-                
-                return {
-                    'error': False,
-                    'table_name': table_name,
-                    'lista_busquedas': lista_busquedas,
-                    'lista_rangos': lista_rangos,
-                    'records_deleted': records_to_delete,
-                    'count': deleted_count,
-                    'message': success_message
-                }
-                
-            except Exception as e:
-                error_result = {
-                    'error': True,
-                    'message': f"Error al ejecutar DELETE en tabla '{table_name}': {str(e)}"
-                }
-                print(f"Error: {error_result['message']}")
-                return error_result
-        else:
-            error_result = {
-                'error': True,
-                'message': f"No hay un gestor de almacenamiento para la tabla '{table_name}'"
-            }
-            print(f"Error: {error_result['message']}")
-            return error_result
     
     def _process_import_csv(self, sql_statement):
         """
@@ -456,26 +300,20 @@ class SQLTableManager:
             storage_manager = self.storage_managers[table_name]
             inserted_ids = []
             failed_inserts = []
-            
-            print(f"📥 Insertando {len(records)} registros desde CSV...")
-            
+                        
             for i, record in enumerate(records, 1):
                 try:
                     record_id = storage_manager.insert(record)
                     if record_id:
                         inserted_ids.append(record_id)
-                        print(f"   ✅ Registro {i}: ID {record_id}")
                     else:
                         failed_inserts.append(i)
-                        print(f"   ❌ Registro {i}: No se pudo insertar (clave duplicada?)")
                 except Exception as e:
                     failed_inserts.append(i)
-                    print(f"   ❌ Registro {i}: Error - {str(e)}")
             
             success_count = len(inserted_ids)
             fail_count = len(failed_inserts)
             
-            print(f"📊 Resultado: {success_count} exitosos, {fail_count} fallidos")
             
             return {
                 'error': False,
@@ -529,7 +367,6 @@ class SQLTableManager:
         table_name = match.group(2)
         options_str = match.group(3)
         
-        print(f"📥 PROCESANDO: IMPORT FROM CSV '{csv_file_path}' INTO {table_name}")
         
         # Verificar que la tabla existe
         if table_name not in self.tables:
@@ -581,7 +418,6 @@ class SQLTableManager:
                 except:
                     pass  # Usar delimiter especificado
                 
-                print(f"   📋 Delimitador: '{delimiter}', Encoding: {encoding}")
                 
                 reader = csv.reader(csvfile, delimiter=delimiter)
                 rows = list(reader)
@@ -599,13 +435,9 @@ class SQLTableManager:
                 if skip_header and len(rows) > 0:
                     headers = [col.strip() for col in rows[0]]
                     data_rows = rows[1:]
-                    print(f"   📄 Headers: {headers}")
                 else:
-                    # Si no hay header, usar nombres de columnas de la tabla en orden
                     headers = [attr['name'] for attr in table_info['attributes']]
-                    print(f"   📄 Sin headers, usando: {headers}")
                 
-                print(f"   📊 Filas de datos: {len(data_rows)}")
                 
                 # Crear mapeo de columnas CSV a atributos de tabla
                 column_mapping = self._create_csv_column_mapping(table_info, headers)
@@ -616,7 +448,6 @@ class SQLTableManager:
                         'message': 'No se pudo mapear las columnas del CSV a la tabla'
                     }
                 
-                print(f"   🗺️ Mapeo: {column_mapping}")
                 
                 # Convertir filas CSV a records (lista de diccionarios)
                 records = []
@@ -661,14 +492,11 @@ class SQLTableManager:
                                     break
                             
                             if not pk_col_in_csv or pk_value == default_pk:
-                                print(f"   ❌ Fila {row_num}: Primary key vacío o inválido, saltando")
                                 continue
                         
                         records.append(record)
-                        print(f"   ✅ Fila {row_num}: {record}")
                 
                     except Exception as e:
-                        print(f"   ❌ Fila {row_num}: Error - {str(e)}")
                         continue
                 
                 if not records:
@@ -677,7 +505,6 @@ class SQLTableManager:
                         'message': 'No se pudieron convertir registros válidos del CSV'
                     }
                 
-                print(f"   🎯 Total de registros válidos: {len(records)}")
                 
                 return {
                     'error': False,
@@ -751,8 +578,6 @@ class SQLTableManager:
             else:
                 return str(value_str)
         except (ValueError, TypeError):
-            print(f"     ⚠️ No se pudo convertir '{value_str}' a {data_type}")
-            # En lugar de retornar None, retornar valor por defecto
             return self._get_default_value_for_type(data_type)
     
     def _get_default_value_for_type(self, data_type):
@@ -954,152 +779,8 @@ class SQLTableManager:
             'records': records
         }
     
-    def parse_sql_select(self, sql_statement):
-        """
-        Analiza una instrucción SQL SELECT y extrae las condiciones de búsqueda.
-        Versión actualizada que soporta BETWEEN para rangos y atributos específicos.
-        Soporta:
-        - SELECT * FROM tabla WHERE attr=value [AND attr2=value2 ...]
-        - SELECT attr1, attr2 FROM tabla WHERE attr=value
-        - SELECT * FROM tabla WHERE attr BETWEEN min_val AND max_val
-        - SELECT attr1 FROM tabla WHERE attr=value AND attr2 BETWEEN min_val AND max_val
-        
-        Args:
-            sql_statement (str): La instrucción SQL SELECT.
-            
-        Returns:
-            dict: Información extraída con lista_busquedas, lista_rangos y atributos solicitados
-        """
-        # Patrón para SELECT básico
-        select_pattern = re.compile(
-            r"SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s*;)?$", 
-            re.IGNORECASE | re.DOTALL
-        )
-        
-        match = select_pattern.match(sql_statement.strip())
-        if not match:
-            return {
-                "error": True,
-                "message": "Formato de SELECT no válido"
-            }
-        
-        columns_str = match.group(1).strip()
-        table_name = match.group(2)
-        where_clause = match.group(3)
-        
-        # Verificar que la tabla existe
-        if table_name not in self.tables:
-            return {
-                "error": True,
-                "message": f"La tabla '{table_name}' no existe"
-            }
-        
-        # Procesar columnas solicitadas
-        requested_attributes = []
-        if columns_str == "*":
-            # Seleccionar todos los atributos
-            requested_attributes = [attr['name'] for attr in self.tables[table_name]['attributes']]
-        else:
-            # Parsear atributos específicos
-            attr_names = [attr.strip() for attr in columns_str.split(',')]
-            
-            # Verificar que todos los atributos existen en la tabla
-            table_attributes = {attr['name'] for attr in self.tables[table_name]['attributes']}
-            
-            for attr_name in attr_names:
-                if attr_name not in table_attributes:
-                    return {
-                        "error": True,
-                        "message": f"El atributo '{attr_name}' no existe en la tabla '{table_name}'"
-                    }
-            
-            requested_attributes = attr_names
-        
-        # Analizar condiciones WHERE y separar en búsquedas exactas y rangos
-        lista_busquedas = []
-        lista_rangos = []
-        
-        if where_clause:
-            try:
-                lista_busquedas, lista_rangos = self._parse_where_with_ranges(where_clause, table_name)
-            except Exception as e:
-                return {
-                    "error": True,
-                    "message": f"Error al parsear condiciones WHERE: {str(e)}"
-                }
-        
-        return {
-            'error': False,
-            'table_name': table_name,
-            'columns': columns_str,
-            'requested_attributes': requested_attributes,
-            'lista_busquedas': lista_busquedas,
-            'lista_rangos': lista_rangos
-        }
     
-    def parse_sql_delete(self, sql_statement):
-        """
-        Analiza una instrucción SQL DELETE FROM y extrae las condiciones.
-        Soporta:
-        - DELETE FROM tabla WHERE attr=value [AND attr2=value2 ...]
-        - DELETE FROM tabla WHERE attr BETWEEN min_val AND max_val
-        - DELETE FROM tabla WHERE attr=value AND attr2 BETWEEN min_val AND max_val
-        
-        Args:
-            sql_statement (str): La instrucción SQL DELETE FROM.
             
-        Returns:
-            dict: Información extraída con lista_busquedas y lista_rangos
-        """
-        # Patrón para DELETE básico
-        delete_pattern = re.compile(
-            r"DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s*;)?$", 
-            re.IGNORECASE | re.DOTALL
-        )
-        
-        match = delete_pattern.match(sql_statement.strip())
-        if not match:
-            return {
-                "error": True,
-                "message": "Formato de DELETE no válido. Use: DELETE FROM tabla [WHERE condiciones]"
-            }
-        
-        table_name = match.group(1)
-        where_clause = match.group(2)
-        
-        # Verificar que la tabla existe
-        if table_name not in self.tables:
-            return {
-                "error": True,
-                "message": f"La tabla '{table_name}' no existe"
-            }
-        
-        # Si no hay WHERE clause, es un DELETE sin condiciones (eliminar todo)
-        if not where_clause:
-            return {
-                "error": True,
-                "message": "DELETE sin WHERE no está permitido por seguridad. Especifique condiciones WHERE."
-            }
-        
-        # Analizar condiciones WHERE y separar en búsquedas exactas y rangos
-        lista_busquedas = []
-        lista_rangos = []
-        
-        try:
-            lista_busquedas, lista_rangos = self._parse_where_with_ranges(where_clause, table_name)
-        except Exception as e:
-            return {
-                "error": True,
-                "message": f"Error al parsear condiciones WHERE: {str(e)}"
-            }
-        
-        return {
-            'error': False,
-            'table_name': table_name,
-            'lista_busquedas': lista_busquedas,
-            'lista_rangos': lista_rangos
-        }
-        
     def _parse_where_with_ranges(self, where_clause, table_name):
         """
         Analiza una cláusula WHERE y la separa en búsquedas exactas y por rango.
@@ -1538,3 +1219,431 @@ class SQLTableManager:
         for attribute in table_info["attributes"]:
             key_info = " (PRIMARY KEY)" if attribute['is_key'] else ""
             print(f"  - Nombre: {attribute['name']}, Tipo: {attribute['data_type']}, Índice: {attribute['index']}{key_info}")
+
+
+    def _process_select(self, sql_statement):
+        """
+        Procesa una instrucción SELECT y ejecuta la búsqueda.
+        VERSIÓN ACTUALIZADA con soporte para funciones espaciales R-Tree.
+        """
+        select_info = self.parse_sql_select(sql_statement)
+        
+        if select_info.get('error', False):
+            print(f"Error en SELECT: {select_info['message']}")
+            return select_info
+        
+        table_name = select_info['table_name']
+        lista_busquedas = select_info['lista_busquedas']
+        lista_rangos = select_info['lista_rangos']
+        lista_espaciales = select_info.get('lista_espaciales', [])  
+        requested_attributes = select_info['requested_attributes']
+        
+        # Ejecutar la consulta si hay un gestor de almacenamiento
+        if table_name in self.storage_managers:
+            storage_manager = self.storage_managers[table_name]
+            
+            try:
+                # Ejecutar el select con listas de búsquedas, rangos Y espaciales
+                resultado = storage_manager.select(
+                    lista_busquedas=lista_busquedas if lista_busquedas else None,
+                    lista_rangos=lista_rangos if lista_rangos else None,
+                    lista_espaciales=lista_espaciales if lista_espaciales else None,  
+                    requested_attributes=requested_attributes
+                )
+                
+                return {
+                    'error': False,
+                    'table_name': table_name,
+                    'lista_busquedas': lista_busquedas,
+                    'lista_rangos': lista_rangos,
+                    'lista_espaciales': lista_espaciales,   
+                    'requested_attributes': requested_attributes,
+                    'resultado': resultado
+                }
+                
+            except Exception as e:
+                error_result = {
+                    'error': True,
+                    'message': f"Error al ejecutar SELECT en tabla '{table_name}': {str(e)}"
+                }
+                print(f"Error: {error_result['message']}")
+                return error_result
+        else:
+            error_result = {
+                'error': True,
+                'message': f"No hay un gestor de almacenamiento para la tabla '{table_name}'"
+            }
+            print(f"Error: {error_result['message']}")
+            return error_result
+
+    def parse_sql_select(self, sql_statement):
+        """
+        Analiza una instrucción SQL SELECT y extrae las condiciones de búsqueda.
+        VERSIÓN ACTUALIZADA con soporte para funciones espaciales RADIUS() y KNN().
+        
+        Soporta:
+        - SELECT * FROM tabla WHERE attr=value
+        - SELECT * FROM tabla WHERE attr BETWEEN min_val AND max_val
+        - SELECT * FROM tabla WHERE RADIUS(attr, center_point, radius)   
+        - SELECT * FROM tabla WHERE KNN(attr, center_point, k)         
+        """
+        # Patrón para SELECT básico
+        select_pattern = re.compile(
+            r"SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s*;)?$", 
+            re.IGNORECASE | re.DOTALL
+        )
+        
+        match = select_pattern.match(sql_statement.strip())
+        if not match:
+            return {
+                "error": True,
+                "message": "Formato de SELECT no válido"
+            }
+        
+        columns_str = match.group(1).strip()
+        table_name = match.group(2)
+        where_clause = match.group(3)
+        
+        # Verificar que la tabla existe
+        if table_name not in self.tables:
+            return {
+                "error": True,
+                "message": f"La tabla '{table_name}' no existe"
+            }
+        
+        # Procesar columnas solicitadas (código existente)
+        requested_attributes = []
+        if columns_str == "*":
+            requested_attributes = [attr['name'] for attr in self.tables[table_name]['attributes']]
+        else:
+            attr_names = [attr.strip() for attr in columns_str.split(',')]
+            table_attributes = {attr['name'] for attr in self.tables[table_name]['attributes']}
+            
+            for attr_name in attr_names:
+                if attr_name not in table_attributes:
+                    return {
+                        "error": True,
+                        "message": f"El atributo '{attr_name}' no existe en la tabla '{table_name}'"
+                    }
+            
+            requested_attributes = attr_names
+        
+        # Analizar condiciones WHERE y separar en búsquedas exactas, rangos Y espaciales
+        lista_busquedas = []
+        lista_rangos = []
+        lista_espaciales = []   
+        
+        if where_clause:
+            try:
+                # 🔧 USAR SOLO EL NUEVO MÉTODO que soporta espaciales
+                lista_busquedas, lista_rangos, lista_espaciales = self._parse_where_with_spatial(where_clause, table_name)
+            except Exception as e:
+                return {
+                    "error": True,
+                    "message": f"Error al parsear condiciones WHERE: {str(e)}"
+                }
+        
+        return {
+            'error': False,
+            'table_name': table_name,
+            'columns': columns_str,
+            'requested_attributes': requested_attributes,
+            'lista_busquedas': lista_busquedas,
+            'lista_rangos': lista_rangos,
+            'lista_espaciales': lista_espaciales   
+        }
+
+    def _parse_where_with_spatial(self, where_clause, table_name):
+        """
+        Parser espacial ULTRA SIMPLE usando split manual.
+        """
+        lista_busquedas = []
+        lista_rangos = []
+        lista_espaciales = []
+        
+        print(f"🔍 Parseando WHERE: '{where_clause}'")
+        
+        remaining_clause = where_clause.strip()
+        
+        # Función helper para extraer función espacial
+        def extract_spatial_function(clause, func_name):
+            """Extrae función espacial usando búsqueda manual"""
+            func_upper = func_name.upper()
+            
+            # Buscar inicio de la función (case insensitive)
+            start_idx = clause.upper().find(func_upper + '(')
+            if start_idx == -1:
+                return None, clause
+            
+            # Encontrar paréntesis balanceados
+            paren_start = start_idx + len(func_upper)
+            paren_count = 0
+            end_idx = paren_start
+            
+            while end_idx < len(clause):
+                if clause[end_idx] == '(':
+                    paren_count += 1
+                elif clause[end_idx] == ')':
+                    paren_count -= 1
+                    if paren_count == 0:
+                        break
+                end_idx += 1
+            
+            if paren_count != 0:
+                return None, clause
+            
+            # Extraer contenido entre paréntesis
+            content = clause[paren_start + 1:end_idx]
+            full_function = clause[start_idx:end_idx + 1]
+            
+            
+            # PARSING MANUAL SUPER SIMPLE
+            # Buscar las tres partes separadas por comas, pero respetando las comillas
+            parts = []
+            current_part = ""
+            in_quotes = False
+            quote_char = None
+            paren_depth = 0
+            
+            for char in content:
+                if not in_quotes and char in ["'", '"']:
+                    in_quotes = True
+                    quote_char = char
+                    current_part += char
+                elif in_quotes and char == quote_char:
+                    in_quotes = False
+                    quote_char = None
+                    current_part += char
+                elif not in_quotes and char == '(':
+                    paren_depth += 1
+                    current_part += char
+                elif not in_quotes and char == ')':
+                    paren_depth -= 1
+                    current_part += char
+                elif not in_quotes and char == ',' and paren_depth == 0:
+                    # Encontramos un separador válido
+                    parts.append(current_part.strip())
+                    current_part = ""
+                else:
+                    current_part += char
+            
+            # Agregar última parte
+            if current_part.strip():
+                parts.append(current_part.strip())
+            
+            
+            if len(parts) == 3:
+                attr_name = parts[0].strip()
+                center_str = parts[1].strip()
+                param_str = parts[2].strip()
+                
+                # Remover comillas externas del center_str
+                if (center_str.startswith("'") and center_str.endswith("'")) or \
+                (center_str.startswith('"') and center_str.endswith('"')):
+                    center_str = center_str[1:-1]
+                
+               
+                new_clause = clause[:start_idx] + clause[end_idx + 1:]
+                
+                return (attr_name, center_str, param_str), new_clause.strip()
+            
+            return None, clause
+        
+        # 1. Extraer RADIUS
+        radius_result, remaining_clause = extract_spatial_function(remaining_clause, 'RADIUS')
+        if radius_result:
+            try:
+                attr_name, center_str, radius_str = radius_result
+                
+                center_point = self._convert_value(center_str, table_name, attr_name)
+                radius = float(radius_str)
+                
+                lista_espaciales.append(['RADIUS', attr_name, center_point, radius])
+                
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+        
+        # 2. Extraer KNN  
+        knn_result, remaining_clause = extract_spatial_function(remaining_clause, 'KNN')
+        if knn_result:
+            try:
+                attr_name, center_str, k_str = knn_result
+                
+                center_point = self._convert_value(center_str, table_name, attr_name)
+                k = int(k_str)
+                
+                lista_espaciales.append(['KNN', attr_name, center_point, k])
+                
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+        
+        # 3. Procesar resto de condiciones
+        remaining_clause = remaining_clause.strip()
+        
+        # Limpiar ANDs sobrantes
+        while remaining_clause.startswith('AND '):
+            remaining_clause = remaining_clause[4:].strip()
+        while remaining_clause.endswith(' AND'):
+            remaining_clause = remaining_clause[:-4].strip()
+        
+        
+        if remaining_clause:
+            try:
+                temp_busquedas, temp_rangos = self._parse_where_with_ranges(remaining_clause, table_name)
+                lista_busquedas.extend(temp_busquedas)
+                lista_rangos.extend(temp_rangos)
+            except Exception as e:
+                print(f"Error en condiciones restantes: {e}")
+        
+        print(f"RESULTADO: Exactas={lista_busquedas}, Rangos={lista_rangos}, Espaciales={lista_espaciales}")
+        return lista_busquedas, lista_rangos, lista_espaciales
+
+    def _process_delete(self, sql_statement):
+        """
+        Procesa una instrucción DELETE FROM y ejecuta la eliminación.
+        VERSIÓN ACTUALIZADA con soporte para funciones espaciales.
+        """
+        delete_info = self.parse_sql_delete(sql_statement)
+        
+        if delete_info.get('error', False):
+            print(f"Error en DELETE: {delete_info['message']}")
+            return delete_info
+        
+        table_name = delete_info['table_name']
+        lista_busquedas = delete_info['lista_busquedas']
+        lista_rangos = delete_info['lista_rangos']
+        lista_espaciales = delete_info.get('lista_espaciales', [])   
+        
+        print(f"Procesando DELETE en tabla: {table_name}")
+        if lista_busquedas:
+            print(f"Condiciones exactas: {lista_busquedas}")
+        if lista_rangos:
+            print(f"Condiciones de rango: {lista_rangos}")
+        if lista_espaciales:   
+            print(f"Condiciones espaciales: {lista_espaciales}")
+        
+        # Verificar que la tabla existe
+        if table_name not in self.tables:
+            error_result = {
+                'error': True,
+                'message': f"La tabla '{table_name}' no existe"
+            }
+            print(f"Error: {error_result['message']}")
+            return error_result
+        
+        if table_name in self.storage_managers:
+            storage_manager = self.storage_managers[table_name]
+            
+            try:
+                resultado_busqueda = storage_manager.select(
+                    lista_busquedas=lista_busquedas if lista_busquedas else None,
+                    lista_rangos=lista_rangos if lista_rangos else None,
+                    lista_espaciales=lista_espaciales if lista_espaciales else None  
+                )
+                
+                if resultado_busqueda.get('error', False):
+                    print(f"Error al buscar registros para eliminar: {resultado_busqueda.get('message', 'Error desconocido')}")
+                    return resultado_busqueda
+                
+                records_to_delete = resultado_busqueda.get('numeros_registro', [])
+                
+                if not records_to_delete:
+                    print("No se encontraron registros que cumplan las condiciones para eliminar")
+                    return {
+                        'error': False,
+                        'table_name': table_name,
+                        'records_deleted': [],
+                        'count': 0,
+                        'message': 'No se encontraron registros para eliminar'
+                    }
+                
+                print(f"Se encontraron {len(records_to_delete)} registros para eliminar: {records_to_delete}")
+                
+                # Eliminar los registros usando el método delete_records del storage manager
+                deleted_count = storage_manager.delete_records(records_to_delete)
+                
+                success_message = f'Se eliminaron {deleted_count} registro(s) exitosamente'
+                
+                return {
+                    'error': False,
+                    'table_name': table_name,
+                    'lista_busquedas': lista_busquedas,
+                    'lista_rangos': lista_rangos,
+                    'lista_espaciales': lista_espaciales,   
+                    'records_deleted': records_to_delete,
+                    'count': deleted_count,
+                    'message': success_message
+                }
+                
+            except Exception as e:
+                error_result = {
+                    'error': True,
+                    'message': f"Error al ejecutar DELETE en tabla '{table_name}': {str(e)}"
+                }
+                print(f"Error: {error_result['message']}")
+                return error_result
+        else:
+            error_result = {
+                'error': True,
+                'message': f"No hay un gestor de almacenamiento para la tabla '{table_name}'"
+            }
+            print(f"Error: {error_result['message']}")
+            return error_result
+
+    def parse_sql_delete(self, sql_statement):
+        """
+        Analiza una instrucción SQL DELETE FROM y extrae las condiciones.
+        VERSIÓN ACTUALIZADA con soporte para funciones espaciales.
+        """
+        # Patrón para DELETE básico
+        delete_pattern = re.compile(
+            r"DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s*;)?$", 
+            re.IGNORECASE | re.DOTALL
+        )
+        
+        match = delete_pattern.match(sql_statement.strip())
+        if not match:
+            return {
+                "error": True,
+                "message": "Formato de DELETE no válido. Use: DELETE FROM tabla [WHERE condiciones]"
+            }
+        
+        table_name = match.group(1)
+        where_clause = match.group(2)
+        
+        # Verificar que la tabla existe
+        if table_name not in self.tables:
+            return {
+                "error": True,
+                "message": f"La tabla '{table_name}' no existe"
+            }
+        
+        # Si no hay WHERE clause, es un DELETE sin condiciones (eliminar todo)
+        if not where_clause:
+            return {
+                "error": True,
+                "message": "DELETE sin WHERE no está permitido por seguridad. Especifique condiciones WHERE."
+            }
+        
+        # Analizar condiciones WHERE y separar en búsquedas exactas, rangos Y espaciales
+        lista_busquedas = []
+        lista_rangos = []
+        lista_espaciales = []   
+        
+        try:
+            lista_busquedas, lista_rangos, lista_espaciales = self._parse_where_with_spatial(where_clause, table_name)
+        except Exception as e:
+            return {
+                "error": True,
+                "message": f"Error al parsear condiciones WHERE: {str(e)}"
+            }
+        
+        return {
+            'error': False,
+            'table_name': table_name,
+            'lista_busquedas': lista_busquedas,
+            'lista_rangos': lista_rangos,
+            'lista_espaciales': lista_espaciales   
+        }

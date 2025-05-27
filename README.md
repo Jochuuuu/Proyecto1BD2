@@ -2,7 +2,7 @@
 
 ## Introducción
 
-Este proyecto implementa un sistema de gestión de bases de datos que utiliza diferentes técnicas de indexación para optimizar la gestión, almacenamiento y recuperación de datos. El sistema está desarrollado en **Python** y permite comparar la eficiencia de distintas estructuras de datos para operaciones de base de datos.
+Este proyecto implementa un sistema de gestión de bases de datos que utiliza diferentes técnicas de indexación para optimizar la gestión, almacenamiento y recuperación de datos. El sistema está desarrollado en **Python** y permite comparar la eficiencia de distintas estructuras de datos para operaciones de base de datos, incluyendo **indexación espacial** para datos geográficos.
 
 ## Objetivos
 
@@ -11,6 +11,7 @@ Este proyecto implementa un sistema de gestión de bases de datos que utiliza di
 - **B+ Tree**: Estructura balanceada optimizada para sistemas de archivos  
 - **AVL Tree**: Árbol binario auto-balanceado  
 - **Extendible Hashing**: Técnica de hashing dinámico
+- **R-Tree**: Índice espacial para datos multidimensionales y geográficos
 
 **Operaciones implementadas para cada técnica:**
 
@@ -18,12 +19,14 @@ Este proyecto implementa un sistema de gestión de bases de datos que utiliza di
 - Búsqueda por rango (`Range Search`)
 - Inserción de registros (`Insert`)
 - Eliminación de registros (`Remove`)
+- **Búsquedas espaciales** (`Radius Search`, `K-Nearest Neighbors`) - **exclusivo R-Tree**
 
 **Análisis de rendimiento:**
 
 - Comparación de tiempos de ejecución  
 - Evaluación de eficiencia en diferentes volúmenes de datos  
 - Medición de complejidad temporal y espacial
+- **Benchmarks específicos para consultas espaciales**
 
 ## Técnicas de Indexación Implementadas
 
@@ -60,6 +63,26 @@ Técnica de hashing dinámico que permite el crecimiento incremental del espacio
 - Eficiente para grandes volúmenes de datos  
 - **Complejidad**: `O(1)` promedio para búsqueda e inserción 
 
+### 4. R-Tree (Spatial Index)  
+
+Estructura de datos espacial especializada para indexar información geográfica y multidimensional, optimizada para consultas de proximidad y área.
+
+**Características:**
+
+- **Índice espacial 2D** para datos de tipo POINT  
+- **Bounding boxes jerárquicos** que agrupan regiones similares  
+- **Variante R*-tree** con optimizaciones de inserción y división  
+- **Búsquedas por radio** eficientes usando geometría euclidiana  
+- **K-vecinos más cercanos** con algoritmos de distancia  
+- **Persistencia en archivos** `.dat` e `.idx` usando librería rtree  
+- **Complejidad**: `O(log n)` para búsquedas espaciales, `O(log n + k)` para consultas de rango
+
+**Operaciones Espaciales Únicas:**
+
+- `rangeSearch(point, radius)` - Encuentra puntos dentro de un radio
+- `rangeSearch(point, k)` - Encuentra los k puntos más cercanos  
+- `rangeSearch(min_point, max_point)` - Búsqueda rectangular tradicional
+
 ## Estructura del Proyecto
 
 ```
@@ -73,6 +96,7 @@ BD2/
 │   ├── avl.py            # Implementación del AVL Tree
 │   ├── btree.py          # Implementación del B+ Tree
 │   ├── hash.py           # Implementación del Extendible Hashing
+│   ├── rtreee .py        # Implementación del R-Tree espacial  
 │   └── point_class.py    # Clase Point para manejo de coordenadas 2D
 │
 ├── tablas/               # Directorio de archivos de datos
@@ -84,7 +108,10 @@ BD2/
     ├── *_tree.dat       # Índices B+ Tree
     ├── *_meta.dat       # Metadatos de índices B+ Tree
     ├── *_index.dat      # Índices Hash - Directorio
-    └── *_buckets.dat    # Índices Hash - Buckets
+    ├── *_buckets.dat    # Índices Hash - Buckets
+    ├── *_rtree.dat      # Índices R-Tree - Datos espaciales  
+    ├── *_rtree.idx      # Índices R-Tree - Estructura del árbol  
+    └── *_rtree_meta.json # Metadatos R-Tree  
 ```
 
 ## Componentes Principales
@@ -94,18 +121,22 @@ BD2/
 - Ejecuta comandos SQL a través de requests POST
 - Soporta CORS para integración con frontend
 - Manejo de serialización de tipos especiales (Point)
+- **Serialización automática de resultados espaciales**
 
 ### 2. **Parser SQL (sql.py)**
 - Interpreta comandos SQL estándar: CREATE, INSERT, SELECT, DELETE
 - Soporte para importación desde CSV
 - Manejo de tipos de datos: INT, DECIMAL, VARCHAR, BOOL, DATE, POINT
 - Procesamiento de condiciones WHERE con rangos y comparaciones
+- **Parser de funciones espaciales: RADIUS() y KNN()**  
 
 ### 3. **Gestor de Tablas (tabla.py)**
 - Almacenamiento eficiente en archivos binarios
 - Lista libre para reutilización de registros eliminados
 - Gestión automática de índices múltiples por tabla
 - Validación y conversión de tipos de datos
+- **Detección automática de índices R-Tree espaciales**  
+- **Integración de búsquedas espaciales con consultas regulares**  
 
 ### 4. **Estructuras de Indexación**
 
@@ -127,23 +158,35 @@ BD2/
 - Ideal para búsquedas exactas O(1)
 - No soporta búsquedas por rango
 
+#### **R-Tree (rtree_file.py)**  
+- **Índice espacial 2D** basado en librería rtree de Python
+- **R*-tree variant** con optimizaciones avanzadas
+- **Cache inteligente** de objetos Point para rendimiento
+- **Bounding boxes dinámicos** que se ajustan automáticamente
+- **Persistencia dual** en archivos .dat e .idx
+- **Buffer management** para operaciones masivas
+- **Detección automática** de registros con coordenadas POINT
+
 ### 5. **Tipo de Dato POINT (point_class.py)**
 - Representa coordenadas 2D (x, y)
 - Operaciones matemáticas sobrecargadas
 - Comparaciones basadas en distancia al origen
 - Búsquedas rectangulares para rangos
+- **Parsing automático desde strings** `"(x, y)"`  
+- **Cálculos de distancia euclidiana** para R-Tree  
+- **Verificación de pertenencia a regiones** rectangulares y circulares  
 
 ## Tipos de Datos Soportados
 
-| Tipo | Descripción | Ejemplo |
-|------|-------------|---------|
-| `INT` | Números enteros | `42` |
-| `DECIMAL` | Números decimales | `3.14159` |
-| `VARCHAR[n]` | Cadenas de longitud variable | `'Texto'` |
-| `CHAR[n]` | Cadenas de longitud fija | `'ABC'` |
-| `BOOL` | Valores booleanos | `true`, `false` |
-| `DATE` | Fechas como timestamp | `1640995200` |
-| `POINT` | Coordenadas 2D | `(1.5, 2.3)` |
+| Tipo | Descripción | Ejemplo | Índices Compatibles |
+|------|-------------|---------|-------------------|
+| `INT` | Números enteros | `42` | AVL, B+Tree, Hash |
+| `DECIMAL` | Números decimales | `3.14159` | AVL, B+Tree, Hash |
+| `VARCHAR[n]` | Cadenas de longitud variable | `'Texto'` | AVL, B+Tree, Hash |
+| `CHAR[n]` | Cadenas de longitud fija | `'ABC'` | AVL, B+Tree, Hash |
+| `BOOL` | Valores booleanos | `true`, `false` | AVL, B+Tree, Hash |
+| `DATE` | Fechas como timestamp | `1640995200` | AVL, B+Tree, Hash |
+| `POINT` | **Coordenadas 2D** | `(1.5, 2.3)` | **R-Tree**   |
 
 ## Comandos SQL Soportados
 
@@ -153,16 +196,24 @@ CREATE TABLE Productos (
     id INT KEY INDEX btree,
     nombre VARCHAR[50] INDEX avl,
     precio DECIMAL INDEX hash,
-    ubicacion POINT INDEX btree
+    ubicacion POINT INDEX rtree    --   Índice espacial
 );
 ```
 
 ### INSERT
 ```sql
 INSERT INTO Productos VALUES (1, 'Laptop', 999.99, '(10.5, 20.3)');
+
+-- Formatos soportados para POINT:
+INSERT INTO Restaurantes VALUES 
+(1, 'Pizza Hut', '(12.5, 25.3)'),     -- Formato estándar
+(2, 'McDonald''s', '12.0, 18.5'),     -- Sin paréntesis  
+(3, 'KFC', '(15.2,30.1)');            -- Sin espacios
 ```
 
 ### SELECT
+
+#### **Búsquedas Tradicionales**
 ```sql
 -- Búsqueda exacta
 SELECT * FROM Productos WHERE id = 1;
@@ -174,14 +225,43 @@ SELECT nombre, precio FROM Productos WHERE precio BETWEEN 100 AND 1000;
 SELECT * FROM Productos WHERE ubicacion BETWEEN '(0, 0)' AND '(50, 50)';
 ```
 
+#### **  Búsquedas Espaciales con R-Tree**
+```sql
+-- Búsqueda por radio: encontrar puntos dentro de 5km del centro (12, 22)
+SELECT * FROM Restaurantes WHERE RADIUS(ubicacion, '(12.0, 22.0)', 5.0);
+
+-- K-vecinos más cercanos: encontrar los 3 restaurantes más cercanos
+SELECT nombre, ubicacion FROM Restaurantes WHERE KNN(ubicacion, '(10.0, 20.0)', 3);
+
+-- Combinación de búsquedas espaciales y tradicionales
+SELECT * FROM Restaurantes 
+WHERE RADIUS(ubicacion, '(15.0, 25.0)', 10.0) AND precio < 50.0;
+
+-- Múltiples condiciones espaciales
+SELECT * FROM Puntos 
+WHERE KNN(ubicacion, '(0, 0)', 5) AND categoria = 'importante';
+```
+
 ### DELETE
+
+#### **Eliminación Tradicional**
 ```sql
 DELETE FROM Productos WHERE precio > 500;
 ```
 
+#### **  Eliminación Espacial**
+```sql
+-- Eliminar puntos en un área específica
+DELETE FROM Restaurantes WHERE RADIUS(ubicacion, '(10.0, 20.0)', 5.0);
+
+-- Eliminar el punto más cercano a una ubicación
+DELETE FROM Puntos WHERE KNN(ubicacion, '(25.0, 30.0)', 1);
+```
+
 ### IMPORT FROM CSV
 ```sql
-IMPORT FROM CSV 'datos.csv' INTO Productos;
+IMPORT FROM CSV 'restaurantes.csv' INTO Restaurantes;
+-- El CSV puede contener columnas POINT que se convierten automáticamente
 ```
 
 ## Instalación y Uso
@@ -191,42 +271,64 @@ IMPORT FROM CSV 'datos.csv' INTO Productos;
 - FastAPI
 - Uvicorn
 - Pydantic
+- **rtree** (para índices espaciales)  
+- **libspatialindex** (dependencia de rtree)  
 
-### Ejemplo de Request
+### Ejemplo de Request Espacial  
 ```json POST /sql
 {
-    "sql": "CREATE TABLE Empleados (id INT KEY INDEX btree, nombre VARCHAR[100] INDEX avl, salario DECIMAL INDEX hash);"
+    "sql": "CREATE TABLE Tiendas (id INT KEY INDEX btree, nombre VARCHAR[100], ubicacion POINT INDEX rtree); INSERT INTO Tiendas VALUES (1, 'Centro Comercial', '(12.5, 25.3)'); SELECT * FROM Tiendas WHERE RADIUS(ubicacion, '(12.0, 25.0)', 2.0);"
 }
 ```
 
 ## Características Especiales
 
+###   **Consultas Espaciales Avanzadas**
+- **Búsquedas por proximidad** con radio personalizable
+- **K-vecinos más cercanos** con algoritmos optimizados  
+- **Combinación de filtros** espaciales y alfanuméricos
+- **Intersección eficiente** de múltiples condiciones espaciales
+
 ###  **Manejo Avanzado de Tipos**
 - Conversión automática de tipos en CSV
 - Serialización JSON de objetos Point
 - Validación estricta de tipos de datos
+- **Parsing robusto de coordenadas** desde múltiples formatos  
 
 ### **Optimización de Consultas**
 - Intersección eficiente de múltiples condiciones
 - Optimización de búsquedas por rango
+- **Cache inteligente para consultas espaciales repetitivas**  
+- **Detección automática del tipo de índice óptimo**  
 
 ###  **Persistencia Robusta**
 - Archivos binarios optimizados
 - Metadatos JSON para estructura
 - Recovery automático de índices
+- **Persistencia dual para R-Tree** (.dat + .idx)  
+- **Compresión automática de índices espaciales**  
 
 ### **Análisis de Rendimiento**
 - Tiempos de ejecución por operación
 - Estadísticas de uso de índices
 - Métricas de almacenamiento
+- **Benchmarks específicos para operaciones espaciales**  
+- **Análisis de distribución geográfica de datos**  
+
+
 
 ## Comparación de Técnicas
 
-| Operación | AVL Tree | B+ Tree | Hash |
-|-----------|----------|---------|------|
-| **Búsqueda Exacta** | O(log n) | O(log n) | O(1) |
-| **Búsqueda Rango** | O(log n + k) | O(log n + k) | ❌ |
-| **Inserción** | O(log n) | O(log n) | O(1) |
-| **Eliminación** | O(log n) | O(log n) | O(1) |
-| **Espacio** | Medio | Alto | Bajo |
-| **Uso Recomendado** | Búsquedas mixtas | Rangos frecuentes | Búsquedas exactas |
+| Operación | AVL Tree | B+ Tree | Hash | **R-Tree** |
+|-----------|----------|---------|------|------------|
+| **Búsqueda Exacta** | O(log n) | O(log n) | O(1) | **O(log n)** |
+| **Búsqueda Rango** | O(log n + k) | O(log n + k) | ❌ | **O(log n + k)** |
+| **Búsqueda Espacial** | ❌ | ❌ | ❌ | **O(log n + k)** |
+| **Radio Search** | ❌ | ❌ | ❌ | **O(log n + k)** |
+| **K-NN Search** | ❌ | ❌ | ❌ | **O(log n + k)** |
+| **Inserción** | O(log n) | O(log n) | O(1) | **O(log n)** |
+| **Eliminación** | O(log n) | O(log n) | O(1) | **O(log n)** |
+| **Espacio** | Medio | Alto | Bajo | **Medio-Alto** |
+| **Datos Soportados** | 1D ordenables | 1D ordenables | 1D hasheables | **2D espaciales** |
+| **Uso Recomendado** | Búsquedas mixtas | Rangos frecuentes | Búsquedas exactas | **Consultas geográficas** |
+

@@ -7,6 +7,7 @@ from estructuras.hash import ExtendibleHashFile
 from estructuras.avl import AVLFile
 from estructuras.btree import BPlusTree
 from estructuras.point_class import Point 
+from estructuras.rtreee import RTreeFile  
 
 class TableStorageManager:
     """
@@ -94,7 +95,8 @@ class TableStorageManager:
             'hash': ExtendibleHashFile,
             'avl': AVLFile,
             'btree': BPlusTree,  
-            'isam' : BPlusTree
+            'isam': BPlusTree,
+            'rtree': RTreeFile   
         }
 
         for attr_index, attr in enumerate(table_info['attributes'], 1):
@@ -121,6 +123,75 @@ class TableStorageManager:
         # Crear el archivo si no existe
         if not os.path.exists(self.filename):
             self._initialize_file()
+
+    def _is_rtree_spatial_index(self, attr_name):
+        """
+        Verifica si un atributo tiene índice R-Tree y es de tipo POINT.
+        
+        Args:
+            attr_name (str): Nombre del atributo
+            
+        Returns:
+            bool: True si es R-Tree espacial
+        """
+        if attr_name not in self.indices:
+            return False
+        
+        # Verificar si el índice es R-Tree
+        if not isinstance(self.indices[attr_name], RTreeFile):
+            return False
+        
+        # Verificar si el tipo de dato es POINT
+        for attr in self.table_info['attributes']:
+            if attr['name'] == attr_name and attr['data_type'].upper() == 'POINT':
+                return True
+        
+        return False
+    
+    def spatial_radius_search(self, attr_name, center_point, radius):
+        """
+        Realiza búsqueda radial usando R-Tree espacial.
+        
+        Args:
+            attr_name (str): Nombre del atributo POINT
+            center_point (Point): Punto central
+            radius (float): Radio de búsqueda
+            
+        Returns:
+            list: Números de registro dentro del radio
+        """
+        if not self._is_rtree_spatial_index(attr_name):
+            raise ValueError(f"El atributo '{attr_name}' no tiene índice R-Tree espacial")
+        
+        # Convertir a objeto Point si es necesario
+        if not isinstance(center_point, Point):
+            center_point = self._convert_search_value(attr_name, center_point)
+        
+        rtree_index = self.indices[attr_name]
+        return rtree_index.range_search_radius(center_point, radius)
+
+    def spatial_knn_search(self, attr_name, center_point, k):
+        """
+        Realiza búsqueda de K vecinos más cercanos usando R-Tree espacial.
+        
+        Args:
+            attr_name (str): Nombre del atributo POINT
+            center_point (Point): Punto central
+            k (int): Número de vecinos más cercanos
+            
+        Returns:
+            list: Números de registro de los k vecinos más cercanos
+        """
+        if not self._is_rtree_spatial_index(attr_name):
+            raise ValueError(f"El atributo '{attr_name}' no tiene índice R-Tree espacial")
+        
+        # Convertir a objeto Point si es necesario
+        if not isinstance(center_point, Point):
+            center_point = self._convert_search_value(attr_name, center_point)
+        
+        rtree_index = self.indices[attr_name]
+        return rtree_index.range_search_knn_simple(center_point, k)
+
     def _calculate_real_attr_index_for_index(self, logical_attr_index):
         """
         Calcula el índice real del atributo considerando que los campos POINT
@@ -585,13 +656,19 @@ class TableStorageManager:
             except Exception as e:
                 print(f" Error al eliminar del índice {attr_name}: {e}")
 
-    # Resto de métodos permanecen igual...
-    def select(self, lista_busquedas=None, lista_rangos=None, requested_attributes=None):
+    def select(self, lista_busquedas=None, lista_rangos=None, lista_espaciales=None, requested_attributes=None):
         """
         Busca registros que cumplan todas las condiciones especificadas.
-        Si no hay condiciones, retorna TODOS los registros.
+        VERSIÓN ACTUALIZADA con soporte para búsquedas espaciales R-Tree.
+        
+        Args:
+            lista_busquedas: Lista de búsquedas exactas [attr_name, value]
+            lista_rangos: Lista de rangos [attr_name, min_val, max_val]
+            lista_espaciales: Lista de búsquedas espaciales [tipo, attr_name, center_point, param]
+                            donde tipo es 'RADIUS' o 'KNN' y param es radio o k
+            requested_attributes: Atributos solicitados
         """
-        if not lista_busquedas and not lista_rangos:
+        if not lista_busquedas and not lista_rangos and not lista_espaciales:
             print("No hay condiciones WHERE - retornando todos los registros")
             all_records = self._get_all_active_record_numbers()
             return {
@@ -603,10 +680,9 @@ class TableStorageManager:
         conjuntos_resultados = []
         errores = []
         
-        # Procesar búsquedas exactas
+        # Procesar búsquedas exactas (código existente)
         if lista_busquedas:
             for i, (attr_name, valor) in enumerate(lista_busquedas):
-                # Convertir valor a tipo apropiado si es necesario
                 converted_value = self._convert_search_value(attr_name, valor)
                 
                 if attr_name in self.indices:
@@ -617,15 +693,12 @@ class TableStorageManager:
                         return {"error": False, "numeros_registro": [], "requested_attributes": requested_attributes}
                     
                     conjuntos_resultados.append(set(resultados))
-                    
                 else:
                     error_msg = f"No existe índice para {attr_name}"
                     errores.append({"error": True, "message": error_msg, "type": "no_index"})
         
-        # Procesar búsquedas por rango
         if lista_rangos:
             for i, (attr_name, min_val, max_val) in enumerate(lista_rangos):
-                # Convertir valores a tipo apropiado si es necesario
                 converted_min = self._convert_search_value(attr_name, min_val)
                 converted_max = self._convert_search_value(attr_name, max_val)
                 
@@ -633,7 +706,6 @@ class TableStorageManager:
                     indice = self.indices[attr_name]
                     resultado = indice.range_search(converted_min, converted_max)
                     
-                    # Verificar si es un error (índice no soporta rangos)
                     if isinstance(resultado, dict) and resultado.get("error", False):
                         errores.append(resultado)
                         continue
@@ -642,10 +714,38 @@ class TableStorageManager:
                         return {"error": False, "numeros_registro": [], "requested_attributes": requested_attributes}
                     
                     conjuntos_resultados.append(set(resultado))
-                    
                 else:
                     error_msg = f"No existe índice para {attr_name}"
                     errores.append({"error": True, "message": error_msg, "type": "no_index"})
+        
+        if lista_espaciales:
+            for i, (tipo, attr_name, center_point, param) in enumerate(lista_espaciales):
+                try:
+                    if tipo.upper() == 'RADIUS':
+                        # Búsqueda por radio
+                        radio = float(param)
+                        resultados = self.spatial_radius_search(attr_name, center_point, radio)
+                        print(f"Búsqueda radial: {attr_name} centro={center_point} radio={radio} → {len(resultados)} resultados")
+                        
+                    elif tipo.upper() == 'KNN':
+                        # Búsqueda K vecinos más cercanos
+                        k = int(param)
+                        resultados = self.spatial_knn_search(attr_name, center_point, k)
+                        print(f"Búsqueda KNN: {attr_name} centro={center_point} k={k} → {len(resultados)} resultados")
+                        
+                    else:
+                        error_msg = f"Tipo de búsqueda espacial '{tipo}' no soportado"
+                        errores.append({"error": True, "message": error_msg, "type": "unsupported_spatial"})
+                        continue
+                    
+                    if not resultados:
+                        return {"error": False, "numeros_registro": [], "requested_attributes": requested_attributes}
+                    
+                    conjuntos_resultados.append(set(resultados))
+                    
+                except Exception as e:
+                    error_msg = f"Error en búsqueda espacial {tipo} para {attr_name}: {str(e)}"
+                    errores.append({"error": True, "message": error_msg, "type": "spatial_error"})
         
         if errores:
             return {
@@ -661,13 +761,11 @@ class TableStorageManager:
                 "errores": []
             }
         
+        # Intersección de todos los conjuntos de resultados
         interseccion_final = conjuntos_resultados[0]
-        
-        for i, conjunto in enumerate(conjuntos_resultados[1:], 1):
+        for conjunto in conjuntos_resultados[1:]:
             interseccion_final = interseccion_final.intersection(conjunto)
-            
             if not interseccion_final:
-                print("  Intersección vacía, terminando")
                 return {"error": False, "numeros_registro": [], "requested_attributes": requested_attributes}
         
         resultado_final = list(interseccion_final)
@@ -755,60 +853,6 @@ class TableStorageManager:
         del record['next']
         return record
 
-    def print_select_results(self, resultado, title="Resultados SELECT"):
-        """
-        Imprime los resultados de un SELECT incluyendo manejo de objetos Point.
-        
-        Args:
-            resultado: Resultado del método select()
-            title: Título para mostrar
-        """
-        print(f"\n{title}")
-        print("=" * 50)
-        
-        if resultado.get("error", False):
-            print("❌ Error en la consulta:")
-            print(f"   {resultado.get('message', 'Error desconocido')}")
-            if "errores" in resultado:
-                for error in resultado["errores"]:
-                    print(f"   - {error.get('message', 'Error')}")
-            return
-        
-        record_numbers = resultado.get("numeros_registro", [])
-        requested_attributes = resultado.get("requested_attributes", [])
-        
-        if not record_numbers:
-            print("📭 No se encontraron registros que cumplan las condiciones")
-            return
-        
-        print(f"📊 Se encontraron {len(record_numbers)} registro(s)")
-        print(f"🎯 Números de registro: {record_numbers}")
-        
-        if requested_attributes:
-            print(f"📋 Atributos solicitados: {requested_attributes}")
-        
-        # Mostrar los datos de los registros
-        print("\n📄 Datos de los registros:")
-        for i, record_num in enumerate(record_numbers, 1):
-            record = self.get(record_num)
-            if record:
-                print(f"\n   Registro #{record_num}:")
-                
-                # Filtrar por atributos solicitados si se especificaron
-                attrs_to_show = requested_attributes if requested_attributes else record.keys()
-                
-                for attr_name in attrs_to_show:
-                    if attr_name in record:
-                        value = record[attr_name]
-                        # Formatear objetos Point de manera legible
-                        if isinstance(value, Point):
-                            print(f"     {attr_name}: {value}")
-                        else:
-                            print(f"     {attr_name}: {value}")
-                    else:
-                        print(f"     {attr_name}: (no encontrado)")
-        
-        print()
 
     # Resto de métodos siguen siendo los mismos...
     def update(self, id, record_data):

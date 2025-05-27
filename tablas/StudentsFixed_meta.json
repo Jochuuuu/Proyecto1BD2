@@ -1,0 +1,102 @@
+{
+  "table_name": "StudentsFixed",
+  "attributes": [
+    {
+      "name": "student_id",
+      "data_type": "VARCHAR[10]",
+      "is_key": true,
+      "index": "avl"
+    },
+    {
+      "name": "age",
+      "data_type": "INT",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "gender",
+      "data_type": "VARCHAR[10]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "study_hours_per_day",
+      "data_type": "DECIMAL",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "social_media_hours",
+      "data_type": "DECIMAL",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "netflix_hours",
+      "data_type": "DECIMAL",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "part_time_job",
+      "data_type": "VARCHAR[5]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "attendance_percentage",
+      "data_type": "DECIMAL",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "sleep_hours",
+      "data_type": "DECIMAL",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "diet_quality",
+      "data_type": "VARCHAR[10]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "exercise_frequency",
+      "data_type": "INT",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "parental_education_level",
+      "data_type": "VARCHAR[20]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "internet_quality",
+      "data_type": "VARCHAR[10]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "mental_health_rating",
+      "data_type": "INT",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "extracurricular_participation",
+      "data_type": "VARCHAR[5]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "exam_score",
+      "data_type": "DECIMAL",
+      "is_key": false,
+      "index": "avl"
+    }
+  ],
+  "primary_key": "student_id"
+}

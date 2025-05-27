@@ -140,11 +140,11 @@ async def execute_sql(request: SQLRequest):
                                     if record:
                                         if requested_attributes:
                                             filtered_record = {k: v for k, v in record.items() if k in requested_attributes}
-                                            records_data.append({"record_id": record_num, **filtered_record})
+                                            #records_data.append({"record_id": record_num, **filtered_record})
+                                            records_data.append(filtered_record)
                                         else:
-                                            records_data.append({"record_id": record_num, **record})
+                                            records_data.append(record)
                         
-                        # Serializar los registros encontrados
                         serialized_records = serialize_records_data(records_data)
                         
                         result["results"].append({
@@ -219,7 +219,6 @@ async def get_tables():
         tables_info = {}
         
         for table_name, table_info in sql_manager.get_all_tables().items():
-            # Obtener información del storage manager si existe
             storage_manager = sql_manager.get_storage_manager(table_name)
             record_count = 0
             active_count = 0
@@ -254,6 +253,7 @@ async def get_tables():
             tables_info[table_name] = {
                 "total_records": record_count,
                 "active_records": active_count,
+                "record_count": active_count,
                 "primary_key": primary_key,
                 "columns": columns,
                 "indexes": indexes

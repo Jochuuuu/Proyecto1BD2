@@ -1,0 +1,30 @@
+{
+  "table_name": "TestRTree",
+  "attributes": [
+    {
+      "name": "id",
+      "data_type": "INT",
+      "is_key": true,
+      "index": "hash"
+    },
+    {
+      "name": "nombre",
+      "data_type": "VARCHAR[30]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "ubicacion",
+      "data_type": "POINT",
+      "is_key": false,
+      "index": "rtree"
+    },
+    {
+      "name": "categoria",
+      "data_type": "VARCHAR[20]",
+      "is_key": false,
+      "index": "hash"
+    }
+  ],
+  "primary_key": "id"
+}

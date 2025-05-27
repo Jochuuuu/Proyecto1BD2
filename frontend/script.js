@@ -226,18 +226,26 @@ function displayTable(records) {
     ).join('');
     
     // Crear filas
-    tableBody.innerHTML = records.map(record => {
+     tableBody.innerHTML = records.map((record, index) => {
         const cells = headers.map(header => {
             let value = record[header];
+            
             if (value === null || value === undefined) {
-                value = '';
+                value = '<span class="null-value">NULL</span>';
             } else if (typeof value === 'object') {
-                value = JSON.stringify(value);
+                    if (value.type === 'POINT') {
+                    value = `<span class="point-value" title="${value.string_representation}">POINT(${value.x}, ${value.y})</span>`;
+                } else {
+                    value = `<span class="object-value">${JSON.stringify(value)}</span>`;
+                }
+            } else if (typeof value === 'string' && value.length > 50) {
+                value = `<span title="${value}">${value.substring(0, 47)}...</span>`;
             }
-            return `<td title="${value}">${value}</td>`;
+            
+            return `<td>${value}</td>`;
         }).join('');
         
-        return `<tr>${cells}</tr>`;
+        return `<tr class="data-row" data-row-index="${index}">${cells}</tr>`;
     }).join('');
 }
 

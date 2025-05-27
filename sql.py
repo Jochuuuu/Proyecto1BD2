@@ -1361,7 +1361,6 @@ class SQLTableManager:
         lista_rangos = []
         lista_espaciales = []
         
-        print(f"🔍 Parseando WHERE: '{where_clause}'")
         
         remaining_clause = where_clause.strip()
         

@@ -683,8 +683,6 @@ class BPlusTree:
         # DETECCIÓN ROBUSTA: Verificar si es tipo Point directamente
         is_point_type = isinstance(min_value, Point) and isinstance(max_value, Point)
         
-        print(f"🔍 B+Tree range_search: rango=[{min_value}, {max_value}]")
-        print(f"   💡 Es tipo Point: {is_point_type} (min: {type(min_value)}, max: {type(max_value)})")
         
         # CASO ESPECIAL: Tipo POINT - búsqueda por coordenadas rectangulares
         if is_point_type:

@@ -1,0 +1,90 @@
+{
+  "table_name": "PerformanceTest",
+  "attributes": [
+    {
+      "name": "id",
+      "data_type": "VARCHAR[5]",
+      "is_key": true,
+      "index": "hash"
+    },
+    {
+      "name": "edad_avl",
+      "data_type": "INT",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "edad_btree",
+      "data_type": "INT",
+      "is_key": false,
+      "index": "btree"
+    },
+    {
+      "name": "nombre_completo",
+      "data_type": "VARCHAR[50]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "ciudad",
+      "data_type": "VARCHAR[20]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "profesion",
+      "data_type": "VARCHAR[20]",
+      "is_key": false,
+      "index": "btree"
+    },
+    {
+      "name": "telefono",
+      "data_type": "VARCHAR[15]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "email",
+      "data_type": "VARCHAR[50]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "salario",
+      "data_type": "INT",
+      "is_key": false,
+      "index": "btree"
+    },
+    {
+      "name": "fecha_nacimiento",
+      "data_type": "VARCHAR[12]",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "codigo_postal",
+      "data_type": "INT",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "puntuacion",
+      "data_type": "DECIMAL",
+      "is_key": false,
+      "index": "btree"
+    },
+    {
+      "name": "estado_civil",
+      "data_type": "VARCHAR[15]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "nivel_educacion",
+      "data_type": "VARCHAR[15]",
+      "is_key": false,
+      "index": "hash"
+    }
+  ],
+  "primary_key": "id"
+}

@@ -62,6 +62,7 @@ class AVLFile:
     def _get_attribute_type(self, attr_index):
         """
         Obtiene el tipo de dato del atributo según los metadatos.
+        VERSIÓN MEJORADA con fallback robusto.
         
         Args:
             attr_index (int): Índice del atributo (empezando desde 1)
@@ -70,13 +71,50 @@ class AVLFile:
             str: Tipo de dato del atributo
         """
         if not self.table_metadata or 'attributes' not in self.table_metadata:
-            return 'UNKNOWN'
+            # Fallback: intentar detectar por el formato struct
+            return self._detect_type_from_format(attr_index)
         
         attributes = self.table_metadata['attributes']
         
         # attr_index empieza desde 1, pero el array desde 0
         if 1 <= attr_index <= len(attributes):
-            return attributes[attr_index - 1]['data_type'].upper()
+            data_type = attributes[attr_index - 1]['data_type'].upper()
+            
+            # Normalizar tipos
+            if data_type.startswith('VARCHAR') or data_type.startswith('CHAR'):
+                return 'VARCHAR'
+            elif data_type == 'INT':
+                return 'INT'
+            elif data_type == 'DECIMAL':
+                return 'DECIMAL'
+            elif data_type == 'POINT':
+                return 'POINT'
+            else:
+                return data_type
+        
+        return 'UNKNOWN'
+    
+    def _detect_type_from_format(self, attr_index):
+        """
+        Detecta el tipo basándose en el formato struct como fallback.
+        
+        Args:
+            attr_index (int): Índice del atributo (1-based)
+            
+        Returns:
+            str: Tipo detectado
+        """
+        if attr_index <= len(self.field_types):
+            format_type = self.field_types[attr_index - 1]
+            
+            if format_type == 'int':
+                return 'INT'
+            elif format_type == 'double':
+                return 'DECIMAL'  
+            elif format_type == 'string':
+                return 'VARCHAR'
+            else:
+                return 'UNKNOWN'
         
         return 'UNKNOWN'
 
@@ -106,7 +144,7 @@ class AVLFile:
     def get_attribute_from_record_num(self, record_num):
         """
         Obtiene el valor del atributo indexado desde un número de registro en el archivo de tablas.
-        VERSIÓN CORREGIDA que maneja tipos POINT correctamente sin depender de metadatos.
+        VERSIÓN CORREGIDA que distingue correctamente entre POINT e INT usando metadatos.
         """
         tabla_filename = f"tablas/{self.table_name}.bin"
         tabla_header_format = "<i"  # 4 bytes para la cabecera (int)
@@ -121,53 +159,63 @@ class AVLFile:
                 record_data = f.read(self.record_size)
                 
                 if not record_data or len(record_data) < self.record_size:
-                    print(f"Error: No se pudo leer el registro {record_num}")
                     return None
                 
                 unpacked_data = list(struct.unpack(self.record_format, record_data))
-               
                 
                 # Obtener el valor del atributo indexado (index_attr empezando desde 1)
                 if self.index_attr < 1 or self.index_attr > len(unpacked_data):
-                    print(f"Error: index_attr {self.index_attr} fuera de rango")
                     return None
                 
-                current_index = self.index_attr - 1 
+                current_index = self.index_attr - 1
                 
-                if (current_index + 1 < len(unpacked_data) and 
-                    isinstance(unpacked_data[current_index], (int, float)) and
-                    isinstance(unpacked_data[current_index + 1], (int, float))):
+                # ✅ USAR METADATOS PARA DETERMINAR EL TIPO CORRECTO
+                attr_type = self._get_attribute_type(self.index_attr)
+                
+                if attr_type == 'POINT':
+                    # Solo si es explícitamente POINT, crear objeto Point
+                    if (current_index + 1 < len(unpacked_data) and 
+                        isinstance(unpacked_data[current_index], (int, float)) and
+                        isinstance(unpacked_data[current_index + 1], (int, float))):
+                        
+                        x_value = float(unpacked_data[current_index])
+                        y_value = float(unpacked_data[current_index + 1])
+                        
+                        point = Point(x_value, y_value)
+                        return point
+                    else:
+                        # Si no puede crear Point, devolver Point por defecto
+                        return Point(0.0, 0.0)
+                
+                else:
+                    # ✅ PARA TODOS LOS OTROS TIPOS (INT, VARCHAR, etc.)
+                    indexed_value = unpacked_data[current_index]
                     
-                    x_value = float(unpacked_data[current_index])
-                    y_value = float(unpacked_data[current_index + 1])
+                    # Manejar strings
+                    if isinstance(indexed_value, bytes):
+                        indexed_value = indexed_value.decode('utf-8').rstrip('\0')
                     
-                    point = Point(x_value, y_value)
-                    return point
-                
-                # Si no es Point, manejar como valor normal
-                indexed_value = unpacked_data[current_index]
-                
-                if isinstance(indexed_value, bytes):
-                    indexed_value = indexed_value.decode('utf-8').rstrip('\0')
-                
-                return indexed_value
-                
+                    return indexed_value
+                    
         except FileNotFoundError:
-            print(f"Error: El archivo {tabla_filename} no existe.")
             return None
         except Exception as e:
-            print(f"Error al leer el atributo del registro {record_num}: {e}")
             return None
 
     def _compare_keys(self, record_num1, record_num2):
         """
         Compara dos números de registro basándose en el valor de sus atributos indexados.
-        VERSIÓN ACTUALIZADA que maneja objetos Point correctamente.
+        VERSIÓN SIN DEBUG EXCESIVO - Solo errores importantes.
         
         Retorna: -1 si attr1 < attr2, 0 si attr1 == attr2, 1 si attr1 > attr2
         """
         valor1 = self.get_attribute_from_record_num(record_num1)
         valor2 = self.get_attribute_from_record_num(record_num2)
+        
+        # ✅ SOLO DEBUG CUANDO HAY PROBLEMAS (no en cada comparación)
+        # if valor1 is not None and valor2 is not None:
+        #     attr_type = self._get_attribute_type(self.index_attr)
+        #     print(f"🔍 Comparando {attr_type}: {valor1} (tipo: {type(valor1).__name__}) vs {valor2} (tipo: {type(valor2).__name__})")
         
         if valor1 is None or valor2 is None:
             return 0  # En caso de error, considerarlos iguales
@@ -180,7 +228,9 @@ class AVLFile:
                 return 1
             else:
                 return 0
-        except TypeError:
+        except TypeError as e:
+            # ✅ SOLO mostrar debug cuando hay errores reales
+            print(f"❌ Error comparando {valor1} vs {valor2}: {e}")
             # Si la comparación falla, intentar comparar como strings
             str1 = str(valor1)
             str2 = str(valor2)
@@ -492,26 +542,26 @@ class AVLFile:
     def range_search(self, min_value, max_value):
         """
         Busca registros cuyos valores de atributo estén en el rango [min_value, max_value].
-        VERSIÓN CORREGIDA que maneja rangos con objetos Point correctamente.
-        
-        Args:
-            min_value: Valor mínimo del rango (puede ser Point, etc.)
-            max_value: Valor máximo del rango (puede ser Point, etc.)
-        Returns:
-            list: Lista de números de registro en el rango
+        VERSIÓN CON DEBUG para identificar problemas.
         """
+
+        
         header = self._read_header()
         root_index = header['root']
+        
+        if root_index == 0:
+            return []
         
         results = []
         self._range_search_rec(root_index, min_value, max_value, results)
         record_numbers = [node['clave'] for node in results]
+        
         return record_numbers
 
     def _range_search_rec(self, root_index, min_value, max_value, results):
         """
         Búsqueda por rango basada en valores de atributos.
-        VERSIÓN CORREGIDA que detecta tipo POINT de forma robusta.
+        VERSIÓN SIMPLIFICADA que maneja correctamente todos los tipos.
         """
         if root_index == 0:
             return
@@ -522,34 +572,29 @@ class AVLFile:
         if current_value is None:
             return
 
-        is_point_type = isinstance(current_value, Point) and isinstance(min_value, Point) and isinstance(max_value, Point)
-
+        attr_type = self._get_attribute_type(self.index_attr)
+        
         try:
-            if is_point_type:
-                
-               
+            if attr_type == 'POINT':
+              
                 self._range_search_rec(root_node['left'], min_value, max_value, results)
                 
-                # Si el punto actual está en el rango rectangular, añadirlo
                 if current_value.is_in_range(min_value, max_value):
                     results.append(root_node)
-                  
                 
-                # Buscar en subarbol derecho
-                self._range_search_rec(root_node['right'], min_value, max_value, results)
-                return
-            
-            
-            if min_value < current_value:
-                self._range_search_rec(root_node['left'], min_value, max_value, results)
-
-            if min_value <= current_value <= max_value:
-                results.append(root_node)
-
-            if current_value <= max_value:
                 self._range_search_rec(root_node['right'], min_value, max_value, results)
                 
-        except TypeError:
+            else:
+                if min_value < current_value:
+                    self._range_search_rec(root_node['left'], min_value, max_value, results)
+
+                if min_value <= current_value <= max_value:
+                    results.append(root_node)
+
+                if current_value <= max_value:
+                    self._range_search_rec(root_node['right'], min_value, max_value, results)
+                    
+        except TypeError as e:
             try:
                 min_str = str(min_value)
                 max_str = str(max_value)
@@ -563,7 +608,7 @@ class AVLFile:
 
                 if current_str <= max_str:
                     self._range_search_rec(root_node['right'], min_value, max_value, results)
-            except:
+            except Exception as inner_e:
                 pass
 
 

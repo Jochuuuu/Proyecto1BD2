@@ -1,0 +1,30 @@
+{
+  "table_name": "TestFix",
+  "attributes": [
+    {
+      "name": "id",
+      "data_type": "INT",
+      "is_key": true,
+      "index": "avl"
+    },
+    {
+      "name": "nombre",
+      "data_type": "VARCHAR[15]",
+      "is_key": false,
+      "index": "hash"
+    },
+    {
+      "name": "punto_avl",
+      "data_type": "POINT",
+      "is_key": false,
+      "index": "avl"
+    },
+    {
+      "name": "punto_btree",
+      "data_type": "POINT",
+      "is_key": false,
+      "index": "btree"
+    }
+  ],
+  "primary_key": "id"
+}

@@ -332,3 +332,243 @@ IMPORT FROM CSV 'restaurantes.csv' INTO Restaurantes;
 | **Datos Soportados** | 1D ordenables | 1D ordenables | 1D hasheables | **2D espaciales** |
 | **Uso Recomendado** | Búsquedas mixtas | Rangos frecuentes | Búsquedas exactas | **Consultas geográficas** |
 
+
+# Análisis Experimental: Comparación de Eficiencia de Índices
+
+## Configuración del Experimento
+
+**Dataset:** PerformanceTest con 5,000 registros sintéticos  
+**Tipos de Índice:** Hash, AVL, B+Tree, Sin Índice  
+**Métricas:** Tiempo de ejecución (ms), Registros encontrados, Eficiencia relativa  
+
+---
+
+
+# Análisis Experimental: Comparación de Eficiencia de Índices
+
+## Configuración del Experimento
+
+### Dataset Utilizado
+**Tabla:** PerformanceTest con **5,000 registros sintéticos** generados automáticamente  
+**Fuente:** medium_dataset.csv (5K registros)  
+**Tipos de Índice:** Hash, AVL, B+Tree, Sin Índice  
+**Métricas:** Tiempo de ejecución (ms), Registros encontrados, Eficiencia relativa  
+
+
+### Código SQL de Configuración
+```sql
+-- Creación de la tabla con múltiples tipos de índices
+CREATE TABLE PerformanceTest (
+    id VARCHAR[5] KEY INDEX hash,           -- Primary Key con Hash (búsquedas exactas O(1))
+    edad_avl INT INDEX avl,                 -- AVL para comparar con B+Tree en rangos
+    edad_btree INT INDEX btree,             -- B+Tree para comparar con AVL en rangos  
+    nombre_completo VARCHAR[50],            -- SIN ÍNDICE para mostrar diferencia
+    ciudad VARCHAR[20] INDEX hash,          -- Hash para búsquedas exactas por ciudad
+    profesion VARCHAR[20] INDEX btree,      -- B+Tree para ordenar y agrupar profesiones
+    telefono VARCHAR[15],                   -- SIN ÍNDICE
+    email VARCHAR[50],                      -- SIN ÍNDICE  
+    salario INT INDEX btree,                -- B+Tree para consultas de rangos salariales
+    fecha_nacimiento VARCHAR[12] INDEX avl, -- AVL para fechas (orden cronológico)
+    codigo_postal INT INDEX hash,           -- Hash para búsquedas exactas por zona
+    puntuacion DECIMAL INDEX btree,         -- B+Tree para rangos de puntuación
+    estado_civil VARCHAR[15] INDEX hash,    -- Hash para agrupaciones rápidas
+    nivel_educacion VARCHAR[15]             -- SIN ÍNDICE para comparación
+);
+
+-- Importación del dataset de 5,000 registros
+IMPORT FROM CSV 'medium_dataset.csv' INTO PerformanceTest;
+
+```
+Los datos son diferentes en avl y btree 
+
+### Estructura del Dataset
+- **Registros totales:** 5,000 
+- **Distribución de índices:**
+  - **4 índices Hash:** id (PK), ciudad, codigo_postal, estado_civil
+  - **2 índices AVL:** edad_avl, fecha_nacimiento  
+  - **4 índices B+Tree:** edad_btree, profesion, salario, puntuacion
+  - **4 campos sin índice (AVL por defecto):** nombre_completo, telefono, email, nivel_educacion  
+
+---
+
+## 1. PRUEBAS DE BÚSQUEDA EXACTA
+
+### Objetivo: Evaluar eficiencia en búsquedas de valores específicos
+
+#### 1.1 Búsquedas con Índice Hash (O(1) esperado)
+
+| Consulta | Campo | Tipo Índice | Tiempo (s) | Registros | Observaciones |
+|----------|-------|-------------|-------------|-----------|---------------|
+| `SELECT * FROM PerformanceTest WHERE id = 'R95BJ'` | id | Hash (PK) | 0.004| 1| |
+| `SELECT * FROM PerformanceTest WHERE ciudad = 'Madrid'` | ciudad | Hash |0.037 |214 | |
+ 
+#### 1.4 Búsquedas Sin Índice (O(n) esperado - Baseline)
+
+| Consulta | Campo | Tipo Índice | Tiempo (s) | Registros | Observaciones |
+|----------|-------|-------------|-------------|-----------|---------------|
+| `SELECT * FROM PerformanceTest WHERE nombre_completo = 'Ana García'` | nombre_completo | Sin índice | 0.320| 5| |
+| `SELECT * FROM PerformanceTest WHERE telefono = '637358986';` | telefono | Sin índice |0.011 | 1| |
+| `SELECT * FROM PerformanceTest WHERE email = 'isabel.morales@yahoo.es' ;` | email | Sin índice | 0.015 | 3| |
+
+---
+
+## 2. PRUEBAS DE BÚSQUEDA POR RANGO
+
+### Objetivo: Comparar AVL vs B+Tree en consultas de rango
+
+
+| Consulta | Índice | Tiempo (s) | Registros | Eficiencia |
+|----------|--------|-------------|-----------|------------|
+| `SELECT * FROM PerformanceTest WHERE edad_avl BETWEEN 20 AND 40` | AVL | 0.3 | 1564 | |
+| `SELECT * FROM PerformanceTest WHERE edad_btree BETWEEN 20 AND 40` | B+Tree | 0.263 | 1610| |
+
+| Consulta | Índice | Tiempo (s) | Registros | Eficiencia |
+|----------|--------|-------------|-----------|------------|
+| `SELECT * FROM PerformanceTest WHERE edad_avl BETWEEN 18 AND 65` | AVL | 0.696| 3621| |
+| `SELECT * FROM PerformanceTest WHERE edad_btree BETWEEN 18 AND 65` | B+Tree | 0.619|3690 | |
+
+---
+
+## PRUEBAS DE CONSULTAS COMPLEJAS
+
+| Consulta | Índices Utilizados | Tiempo (s) | Registros | Observaciones |
+|----------|-------------------|-------------|-----------|---------------|
+| `SELECT * FROM PerformanceTest WHERE ciudad = 'Madrid' AND edad_avl > 30` | Hash + AVL |0.751  | 164| |
+
+
+# Análisis Experimental: Comparación AVL vs B+Tree para Datos Espaciales (POINT)
+
+## Configuración del Experimento TestFix
+
+### Dataset Utilizado
+**Tabla:** TestFix con **1,004 registros** (1,000 registros generados + 4 registros iniciales)  
+**Fuente:** testfix_1k_data.csv + registros iniciales  
+**Tipos de Índice:** AVL, B+Tree, Hash  
+**Tipo de Dato Especial:** POINT (coordenadas 2D)  
+
+### Código SQL de Configuración
+```sql
+-- Creación de la tabla con índices espaciales
+CREATE TABLE TestFix (
+    id INT PRIMARY KEY INDEX avl,
+    nombre VARCHAR[15] INDEX hash,
+    punto_avl POINT INDEX avl,
+    punto_btree POINT INDEX btree
+);
+
+-- Importación del dataset de 1,000 registros espaciales
+IMPORT FROM CSV 'testfix_1k_data.csv' INTO TestFix;
+```
+
+### Estructura del Dataset
+- **Registros totales:** 1,004
+- **Registros de prueba:** 1,000 (IDs 8-1007)  
+- **Distribución de índices:**
+  - **1 índice AVL:** id (Primary Key)
+  - **1 índice Hash:** nombre  
+  - **1 índice AVL:** punto_avl (datos espaciales POINT)
+  - **1 índice B+Tree:** punto_btree (datos espaciales POINT)
+- **Características especiales:**
+  - punto_avl = punto_btree (valores idénticos para comparación directa)
+  - Coordenadas en formato "(x, y)" 
+  - Rango de coordenadas: -10.0 a 10.0
+
+---
+
+
+
+## 1. PRUEBAS DE BÚSQUEDA ESPACIAL POR RANGO
+
+### Objetivo: Comparar AVL vs B+Tree en consultas de área rectangular
+
+#### 1.1 Rangos Pequeños (área cercana al origen)
+
+| Consulta | Índice | Tiempo (s) | Registros | Eficiencia |
+|----------|--------|-------------|-----------|------------|
+| `SELECT * FROM TestFix WHERE punto_avl BETWEEN '(-1.0, -1.0)' AND '(1.0, 1.0)'` | AVL | 0.120 | 145| Área 2x2 centrada en origen |
+| `SELECT * FROM TestFix WHERE punto_btree BETWEEN '(-1.0, -1.0)' AND '(1.0, 1.0)'` | B+Tree | 0.464| 145| Misma área, índice B+Tree |
+| `SELECT * FROM TestFix WHERE punto_avl BETWEEN '(-0.5, -0.5)' AND '(0.5, 0.5)'` | AVL | 0.114| 72 | Área 1x1 muy pequeña |
+| `SELECT * FROM TestFix WHERE punto_btree BETWEEN '(-0.5, -0.5)' AND '(0.5, 0.5)'` | B+Tree |0.166 | 72 | Misma área pequeña |
+
+#### 1.2 Rangos Medianos (cuadrantes completos)
+
+| Consulta | Índice | Tiempo (s) | Registros | Eficiencia |
+|----------|--------|-------------|-----------|------------|
+| `SELECT * FROM TestFix WHERE punto_avl BETWEEN '(0.0, 0.0)' AND '(5.0, 5.0)'` | AVL |0.118 | 146| Cuadrante I parcial |
+| `SELECT * FROM TestFix WHERE punto_btree BETWEEN '(0.0, 0.0)' AND '(5.0, 5.0)'` | B+Tree | 0.162| 146| Misma área, B+Tree |
+| `SELECT * FROM TestFix WHERE punto_avl BETWEEN '(-5.0, -5.0)' AND '(0.0, 0.0)'` | AVL | 0.121| 143| Cuadrante III parcial |
+| `SELECT * FROM TestFix WHERE punto_btree BETWEEN '(-5.0, -5.0)' AND '(0.0, 0.0)'` | B+Tree |0.168  |143 | Misma área, B+Tree |
+
+#### 1.3 Rangos Grandes (área completa del dataset)
+
+| Consulta | Índice | Tiempo (s) | Registros | Eficiencia |
+|----------|--------|-------------|-----------|------------|
+| `SELECT * FROM TestFix WHERE punto_avl BETWEEN '(-10.0, -10.0)' AND '(10.0, 10.0)'` | AVL | 0.187|1004 | Área completa del dataset |
+| `SELECT * FROM TestFix WHERE punto_btree BETWEEN '(-10.0, -10.0)' AND '(10.0, 10.0)'` | B+Tree | 0.246| 1004| Misma área completa |
+---
+
+## 3. PRUEBAS DE CONSULTAS ESPACIALES COMPLEJAS
+
+### Objetivo: Evaluar combinación de índices espaciales y alfanuméricos
+
+| Consulta | Índices Utilizados | Tiempo (s) | Registros | Observaciones |
+|----------|-------------------|-------------|-----------|---------------|
+| `SELECT * FROM TestFix WHERE id > 500 AND punto_btree BETWEEN '(0.0, 0.0)' AND '(3.0, 3.0)'` | AVL + B+Tree |0.512  | 65| Filtro por ID + área espacial |
+| `SELECT * FROM TestFix WHERE punto_avl BETWEEN '(-2.0, -2.0)' AND '(2.0, 2.0)' AND punto_btree BETWEEN '(-2.0, -2.0)' AND '(2.0, 2.0)'  AND id < 100` | AVL + B+Tree |0.272  | 19| Verificación de igualdad |
+
+---
+
+
+# Análisis Experimental: R-Tree para Búsquedas Espaciales
+
+## Configuración del Experimento R-Tree
+
+### Dataset Utilizado y Estructura
+
+-- Creación de la tabla con índice R-Tree espacial
+CREATE TABLE TestRTree (
+    id INT PRIMARY KEY,
+    nombre VARCHAR[30],
+    ubicacion POINT INDEX rtree,
+    categoria VARCHAR[20]
+);
+
+800 datos cargados
+
+## 1. PRUEBAS DE BÚSQUEDA POR RADIO (RADIUS)
+
+### Objetivo: Evaluar eficiencia de búsquedas circulares R-Tree
+ 
+| Consulta | Centro | Radio | Tiempo (s) | Registros | Puntos Encontrados |
+|----------|--------|-------|-------------|-----------|-------------------|
+| `SELECT * FROM TestRTree WHERE RADIUS(ubicacion, '(12.0, 22.0)', 5.0)` | (12.0, 22.0) | 5.0 | 0.005 | 21|  |
+| `SELECT * FROM TestRTree WHERE RADIUS(ubicacion, '(10.0, 20.0)', 3.0)` | (10.0, 20.0) | 3.0 |0.004 | 8| |
+| `SELECT * FROM TestRTree WHERE RADIUS(ubicacion, '(15.0, 25.0)', 26.0)` | (15.0, 25.0) | 2.0 |0.020  | 230|  |
+| `SELECT * FROM TestRTree WHERE RADIUS(ubicacion, '(0.0, 0.0)', 50.0)` | (0.0, 0.0) | 50.0 | 0.058  | 780| |
+
+
+---
+
+## 2. PRUEBAS DE BÚSQUEDA K-NN (K VECINOS MÁS CERCANOS)
+
+### Objetivo: Evaluar eficiencia de búsquedas de proximidad R-Tree
+
+| Consulta | Centro | K | Tiempo (s) | Registros | Puntos Esperados|
+|----------|--------|---|-------------|-----------|-------------------------|
+| `SELECT * FROM TestRTree WHERE KNN(ubicacion, '(11.0, 19.0)', 2)` | (11.0, 19.0) | 2 |0.314 |2 | A, C (más cercanos) |
+| `SELECT * FROM TestRTree WHERE KNN(ubicacion, '(12.0, 22.0)', 1)` | (12.0, 22.0) | 1 |0.005 | 1| A (más cercano) |
+| `SELECT * FROM TestRTree WHERE KNN(ubicacion, '(15.0, 25.0)', 30)` | (15.0, 25.0) | 3 |0.007 | 30| B, A, C, ... (30más cercanos) |
+| `SELECT nombre, ubicacion FROM TestRTree WHERE KNN(ubicacion, '(8.0, 22.0)', 400)` | (8.0, 22.0) | 4 | 0.031| 400| D, A, C, B ,. .. (400 ) |
+
+
+## 3. PRUEBAS DE CONSULTAS ESPACIALES COMPLEJAS
+
+### Objetivo: Evaluar combinación de filtros espaciales y alfanuméricos
+
+| Consulta | Índices | Tiempo (s) | Registros | Observaciones |
+|----------|---------|-------------|-----------|---------------|
+| `SELECT * FROM TestRTree WHERE RADIUS(ubicacion, '(12.0, 20.0)', 4.0) AND categoria = 'tipo1'` | R-Tree + Secuencial |0.019 | 4| A, C esperados |
+
+![alt text](image-1.png)
+
+---

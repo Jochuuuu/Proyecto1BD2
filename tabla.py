@@ -91,6 +91,9 @@ class TableStorageManager:
         self.header_format = "<i"  # 4 bytes para la cabecera (int)
         self.header_size = struct.calcsize(self.header_format)
         
+        if not os.path.exists(self.filename):
+            self._initialize_file()
+
         INDEX_CLASSES = {
             'hash': ExtendibleHashFile,
             'avl': AVLFile,
@@ -102,8 +105,8 @@ class TableStorageManager:
         for attr_index, attr in enumerate(table_info['attributes'], 1):
             if attr.get('index'):
                 index_type = attr['index'].lower()
+                print(index_type,"y atr",attr,attr_index)
                 if index_type not in INDEX_CLASSES:
-                    print(f"Advertencia: Tipo de índice '{attr['index']}' no soportado para {attr['name']}, usando AVL")
                     index_type = 'avl'
                 
                 real_attr_index = self._calculate_real_attr_index_for_index(attr_index)
@@ -120,10 +123,7 @@ class TableStorageManager:
                 index_class = INDEX_CLASSES[index_type]
                 self.indices[attr['name']] = index_class(**index_params)
 
-        # Crear el archivo si no existe
-        if not os.path.exists(self.filename):
-            self._initialize_file()
-
+        
     def _is_rtree_spatial_index(self, attr_name):
         """
         Verifica si un atributo tiene índice R-Tree y es de tipo POINT.
@@ -668,6 +668,7 @@ class TableStorageManager:
                             donde tipo es 'RADIUS' o 'KNN' y param es radio o k
             requested_attributes: Atributos solicitados
         """
+        print("quee",lista_busquedas,lista_rangos,lista_espaciales,"gaa")
         if not lista_busquedas and not lista_rangos and not lista_espaciales:
             print("No hay condiciones WHERE - retornando todos los registros")
             all_records = self._get_all_active_record_numbers()
@@ -705,7 +706,8 @@ class TableStorageManager:
                 if attr_name in self.indices:
                     indice = self.indices[attr_name]
                     resultado = indice.range_search(converted_min, converted_max)
-                    
+                    print("aver resultado",resultado)
+                    print(i,attr_name)
                     if isinstance(resultado, dict) and resultado.get("error", False):
                         errores.append(resultado)
                         continue
@@ -831,7 +833,7 @@ class TableStorageManager:
             if record and record.get('next') == self.RECORD_NORMAL:
                 active_records.append(i)
         
-        print(f"Encontrados {len(active_records)} registros activos: {active_records}")
+        #print(f"Encontrados {len(active_records)} registros activos: {active_records}")
         return active_records
 
     def get(self, id):

@@ -3,6 +3,7 @@ import re
 import os
 import pickle
 import json
+from estructuras.point_class import Point  
 
 class BPlusTreeNode:
     def __init__(self, is_leaf=False):
@@ -25,6 +26,9 @@ class BPlusTree:
         self.table_name = table_name
         self.is_key = is_key  # Indica si el atributo es una clave (no permite duplicados)
         
+        # Cargar metadata de la tabla para obtener información de tipos
+        self.table_metadata = self._load_table_metadata()
+        
         # Analizar el formato para determinar los tipos de campo
         self.field_types = self._parse_format(record_format)
         self.record_size = struct.calcsize(self.record_format)
@@ -40,6 +44,47 @@ class BPlusTree:
         
         # Cargar índice si existe
         self.load_index()
+
+    def _load_table_metadata(self):
+        """
+        Carga los metadatos de la tabla desde el archivo _meta.json
+        
+        Returns:
+            dict: Metadatos de la tabla o None si no se puede cargar
+        """
+        metadata_path = f"tablas/{self.table_name}_meta.json"
+        
+        try:
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                print(f"Advertencia: No se encontró el archivo de metadatos {metadata_path}")
+                return None
+        except Exception as e:
+            print(f"Error al cargar metadatos: {e}")
+            return None
+
+    def _get_attribute_type(self, attr_index):
+        """
+        Obtiene el tipo de dato del atributo según los metadatos.
+        
+        Args:
+            attr_index (int): Índice del atributo (empezando desde 1)
+            
+        Returns:
+            str: Tipo de dato del atributo
+        """
+        if not self.table_metadata or 'attributes' not in self.table_metadata:
+            return 'UNKNOWN'
+        
+        attributes = self.table_metadata['attributes']
+        
+        # attr_index empieza desde 1, pero el array desde 0
+        if 1 <= attr_index <= len(attributes):
+            return attributes[attr_index - 1]['data_type'].upper()
+        
+        return 'UNKNOWN'
 
     def _parse_format(self, format_str):
         """Analiza el formato del registro para determinar los tipos de cada campo."""
@@ -208,8 +253,13 @@ class BPlusTree:
             for child in node.children:
                 self._collect_leaves(child, leaves)
 
+    
+    
     def get_attribute_from_record_num(self, record_num):
-        """Obtiene el valor del atributo indexado desde un número de registro en el archivo de tablas."""
+        """
+        Obtiene el valor del atributo indexado desde un número de registro en el archivo de tablas.
+        VERSIÓN CORREGIDA que maneja tipos POINT correctamente sin depender de metadatos.
+        """
         tabla_filename = f"tablas/{self.table_name}.bin"
         tabla_header_format = "<i"
         tabla_header_size = struct.calcsize(tabla_header_format)
@@ -228,34 +278,50 @@ class BPlusTree:
                 
                 # Desempaquetar los datos usando el formato
                 unpacked_data = list(struct.unpack(self.record_format, record_data))
+             
                 
                 # Obtener el valor del atributo indexado
                 if self.index_attr < 1 or self.index_attr > len(unpacked_data):
                     return None
-                    
-                indexed_value = unpacked_data[self.index_attr - 1]
                 
-                # Convertir según el tipo de campo
-                field_type = self.field_types[self.index_attr - 1] if self.index_attr - 1 < len(self.field_types) else 'unknown'
-                if field_type == 'string':
+                current_index = self.index_attr - 1  # Convertir a índice base-0
+                
+                if (current_index + 1 < len(unpacked_data) and 
+                    isinstance(unpacked_data[current_index], (int, float)) and
+                    isinstance(unpacked_data[current_index + 1], (int, float))):
+                    
+                    x_value = float(unpacked_data[current_index])
+                    y_value = float(unpacked_data[current_index + 1])
+                    
+                    point = Point(x_value, y_value)
+                    return point
+                
+                # Si no es Point, manejar como valor normal
+                indexed_value = unpacked_data[current_index]
+                
+                # Convertir strings si es necesario
+                if isinstance(indexed_value, bytes):
                     indexed_value = indexed_value.decode('utf-8').rstrip('\0')
                 
                 return indexed_value
-                
+                    
         except FileNotFoundError:
             return None
         except Exception as e:
             return None
 
     def _compare_record_values(self, record_num1, record_num2):
-        """Compara dos números de registro basándose en el valor de sus atributos indexados."""
+        """
+        Compara dos números de registro basándose en el valor de sus atributos indexados.
+        VERSIÓN ACTUALIZADA que maneja objetos Point correctamente.
+        """
         valor1 = self.get_attribute_from_record_num(record_num1)
         valor2 = self.get_attribute_from_record_num(record_num2)
         
         if valor1 is None or valor2 is None:
             return 0
         
-        # Manejar comparación entre tipos diferentes
+        # Usar las operaciones sobrecargadas de Point si son objetos Point
         try:
             if valor1 < valor2:
                 return -1
@@ -264,6 +330,7 @@ class BPlusTree:
             else:
                 return 0
         except TypeError:
+            # Si la comparación falla, intentar comparar como strings
             str1 = str(valor1)
             str2 = str(valor2)
             if str1 < str2:
@@ -274,12 +341,16 @@ class BPlusTree:
                 return 0
 
     def _compare_value_with_record(self, target_value, record_num):
-        """Compara un valor objetivo con el valor del atributo de un registro."""
+        """
+        Compara un valor objetivo con el valor del atributo de un registro.
+        VERSIÓN ACTUALIZADA que maneja objetos Point correctamente.
+        """
         record_value = self.get_attribute_from_record_num(record_num)
         
         if record_value is None:
             return 0
         
+        # Usar las operaciones sobrecargadas para comparar
         try:
             if target_value < record_value:
                 return -1
@@ -288,6 +359,7 @@ class BPlusTree:
             else:
                 return 0
         except TypeError:
+            # Si la comparación falla, convertir a string y comparar
             target_str = str(target_value)
             record_str = str(record_value)
             if target_str < record_str:
@@ -298,7 +370,10 @@ class BPlusTree:
                 return 0
         
     def search(self, target_value):
-        """Busca registros que tengan el valor específico en el atributo indexado."""
+        """
+        Busca registros que tengan el valor específico en el atributo indexado.
+        VERSIÓN ACTUALIZADA que maneja búsquedas con objetos Point.
+        """
         result = []
         leaf = self._find_leaf_by_value(target_value)
         
@@ -599,32 +674,93 @@ class BPlusTree:
                 self.root.parent = None
     
     def range_search(self, min_value, max_value):
-        """Busca registros cuyos valores de atributo estén en el rango [min_value, max_value]."""
+        """
+        Busca registros cuyos valores de atributo estén en el rango [min_value, max_value].
+        VERSIÓN CORREGIDA que detecta tipo POINT de forma robusta.
+        """
         result = []
+        
+        # DETECCIÓN ROBUSTA: Verificar si es tipo Point directamente
+        is_point_type = isinstance(min_value, Point) and isinstance(max_value, Point)
+        
+        print(f"🔍 B+Tree range_search: rango=[{min_value}, {max_value}]")
+        print(f"   💡 Es tipo Point: {is_point_type} (min: {type(min_value)}, max: {type(max_value)})")
+        
+        # CASO ESPECIAL: Tipo POINT - búsqueda por coordenadas rectangulares
+        if is_point_type:
+            
+            # Para Point, necesitamos recorrer todas las hojas y verificar is_in_range
+            leaf = self._get_first_leaf()
+            records_checked = 0
+            records_found = 0
+            
+            while leaf is not None:
+                print(f"   📄 Revisando hoja con {len(leaf.keys)} registros: {leaf.keys}")
+                for record_num in leaf.keys:
+                    record_value = self.get_attribute_from_record_num(record_num)
+                    records_checked += 1
+                    
+                    print(f"      🔍 Registro {record_num}: valor={record_value} (tipo: {type(record_value)})")
+                    
+                    if isinstance(record_value, Point):
+                        # Usar el método is_in_range para verificar si está en el rectángulo
+                        if record_value.is_in_range(min_value, max_value):
+                            result.append(record_num)
+                            records_found += 1
+                       
+                    else:
+                        print(f" Registro {record_num}: {record_value} no es Point (es {type(record_value)})")
+                            
+                leaf = leaf.next
+            
+            return result
+        
         
         leaf = self._find_leaf_by_value(min_value)
         current_leaf = leaf
+        records_checked = 0
+        records_found = 0
         
         while current_leaf is not None:
             for record_num in current_leaf.keys:
                 record_value = self.get_attribute_from_record_num(record_num)
+                records_checked += 1
+                
                 if record_value is not None:
                     try:
+                        # Usar las operaciones sobrecargadas para comparar rangos
                         if min_value <= record_value <= max_value:
                             result.append(record_num)
+                            records_found += 1
                         elif record_value > max_value:
-                            return result
+                            break
+                      
+                            
                     except TypeError:
                         min_str = str(min_value)
                         max_str = str(max_value)
                         record_str = str(record_value)
                         if min_str <= record_str <= max_str:
                             result.append(record_num)
+                            records_found += 1
                         elif record_str > max_str:
-                            return result
+                            break
+                            
+            # Si encontramos un valor que excede el máximo, no seguir
+            if current_leaf.keys:
+                last_value = self.get_attribute_from_record_num(current_leaf.keys[-1])
+                if last_value is not None:
+                    try:
+                        if last_value > max_value:
+                            break
+                    except TypeError:
+                        if str(last_value) > str(max_value):
+                            break
+                            
             current_leaf = current_leaf.next
         
         return result
+
     
     def get_all_data(self):
         """Retorna todos los números de registro del árbol ordenados por valor de atributo"""
@@ -643,6 +779,68 @@ class BPlusTree:
         while not node.is_leaf:
             node = node.children[0]
         return node
+    
+    def print_tree(self):
+        """Imprime el árbol de manera visual mostrando números de registro y valores de atributo"""
+        if not self.root:
+            print("Árbol vacío")
+            return
+        
+        print(f"B+ Tree (Grado = {self.degree}, Atributo = {self.index_attr}, Tabla = {self.table_name})")
+        print(f"Archivos: {self.tree_file}")
+        print("=" * 70)
+        
+        levels = []
+        queue = [(self.root, 0)]
+        
+        while queue:
+            node, level = queue.pop(0)
+            
+            while len(levels) <= level:
+                levels.append([])
+            
+            if node.is_leaf:
+                key_strs = []
+                for record_num in node.keys:
+                    attr_value = self.get_attribute_from_record_num(record_num)
+                    # Formatear Point de manera legible
+                    if isinstance(attr_value, Point):
+                        key_strs.append(f"{record_num}({attr_value})")
+                    else:
+                        key_strs.append(f"{record_num}({attr_value})")
+                levels[level].append(f"[{' '.join(key_strs)}]")
+            else:
+                key_strs = []
+                for record_num in node.keys:
+                    attr_value = self.get_attribute_from_record_num(record_num)
+                    # Formatear Point de manera legible
+                    if isinstance(attr_value, Point):
+                        key_strs.append(f"{record_num}({attr_value})")
+                    else:
+                        key_strs.append(f"{record_num}({attr_value})")
+                levels[level].append(f"({' '.join(key_strs)})")
+                for child in node.children:
+                    queue.append((child, level + 1))
+        
+        for i, level in enumerate(levels):
+            indent = "  " * (len(levels) - i - 1)
+            print(f"Nivel {i}: {indent}{' '.join(level)}")
+        
+        print("\nDatos en hojas (enlazados):")
+        leaf = self._get_first_leaf()
+        leaf_data = []
+        while leaf is not None:
+            key_strs = []
+            for record_num in leaf.keys:
+                attr_value = self.get_attribute_from_record_num(record_num)
+                # Formatear Point de manera legible
+                if isinstance(attr_value, Point):
+                    key_strs.append(f"{record_num}({attr_value})")
+                else:
+                    key_strs.append(f"{record_num}({attr_value})")
+            leaf_data.append(f"[{' '.join(key_strs)}]")
+            leaf = leaf.next
+        print(" -> ".join(leaf_data))
 
     def rebuild_index(self):
         """Reconstruye el índice desde cero leyendo todos los registros de la tabla"""

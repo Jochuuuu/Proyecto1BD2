@@ -2,12 +2,14 @@ import re
 from pathlib import Path
 import os
 import csv
+import json 
+from estructuras.point_class import Point  # Importar la clase Point
 
 class SQLTableManager:
     """
     Clase para gestionar tablas SQL, permitiendo analizar y almacenar
     definiciones de tablas a partir de declaraciones CREATE TABLE, INSERT INTO, SELECT, DELETE FROM e IMPORT FROM CSV.
-    Versión actualizada con soporte completo para búsquedas por rango, atributos específicos, DELETE e importación CSV.
+    VERSIÓN ACTUALIZADA con soporte completo para tipo POINT.
     """
     
     def __init__(self, storage_class=None, base_dir='tablas'):
@@ -24,8 +26,47 @@ class SQLTableManager:
         self.base_dir = base_dir
         self.operations = []
         
-        # Crear el directorio base si no existe
         Path(base_dir).mkdir(exist_ok=True)
+        
+        self.load_existing_tables()
+
+    def load_existing_tables(self):
+        """
+        Carga todas las tablas existentes desde el sistema de archivos.
+        Busca archivos *_meta.json en el directorio base y recrea las estructuras.
+        """
+        if not os.path.exists(self.base_dir):
+            return
+        
+        tables_found = 0
+        
+        # Buscar archivos de metadata
+        for filename in os.listdir(self.base_dir):
+            if filename.endswith('_meta.json'):
+                table_name = filename.replace('_meta.json', '')
+                metadata_path = os.path.join(self.base_dir, filename)
+                
+                try:
+                    # Cargar metadata de la tabla
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
+                        table_info = json.load(f)
+                    
+                    # Verificar que existe el archivo de datos
+                    data_file = os.path.join(self.base_dir, f"{table_name}.bin")
+                    if not os.path.exists(data_file):
+                        continue
+                    
+                    self.tables[table_name] = table_info
+                    
+                    if self.storage_class:
+                        self.storage_managers[table_name] = self.storage_class(
+                            table_name, table_info, self.base_dir
+                        )
+                    
+                    tables_found += 1
+                    
+                except Exception as e:
+                    continue
     
     def parse_sql_statement(self, sql_statement):
         """
@@ -168,7 +209,6 @@ class SQLTableManager:
                 # Si ya existe un gestor para esta tabla, lo eliminamos primero
                 if table_name in self.storage_managers:
                     return table_name
-                    #del self.storage_managers[table_name]
 
                 # Crear un nuevo gestor
                 self.storage_managers[table_name] = self.storage_class(
@@ -195,7 +235,6 @@ class SQLTableManager:
             
             # Verificar que la tabla existe
             if table_name not in self.tables:
-                #print(f"Error: No se puede insertar en la tabla '{table_name}' porque no existe.")
                 return None
             
             # Si hay un gestor de almacenamiento para esta tabla, insertar los registros
@@ -260,7 +299,7 @@ class SQLTableManager:
                     requested_attributes=requested_attributes
                 )
                 
-                storage_manager.print_select_results(resultado, f"SELECT en {table_name}")
+                #storage_manager.print_select_results(resultado, f"SELECT en {table_name}")
                 
                 return {
                     'error': False,
@@ -686,6 +725,7 @@ class SQLTableManager:
     def _convert_csv_value(self, value_str, attr_name, table_info):
         """
         Convierte valor CSV al tipo correcto según la tabla.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
         """
         # Buscar tipo de dato del atributo
         data_type = None
@@ -698,7 +738,11 @@ class SQLTableManager:
             return value_str
         
         try:
-            if 'INT' in data_type:
+            if data_type == 'POINT':
+                # Intentar convertir string a Point
+                # Formatos soportados: "(1.5, 2.3)", "1.5, 2.3", "1.5;2.3", etc.
+                return Point.from_string(value_str)
+            elif 'INT' in data_type:
                 return int(float(value_str))  # float primero por si hay decimales
             elif 'DECIMAL' in data_type or 'FLOAT' in data_type:
                 return float(value_str)
@@ -714,6 +758,7 @@ class SQLTableManager:
     def _get_default_value_for_type(self, data_type):
         """
         Obtiene el valor por defecto para un tipo de dato cuando el campo está vacío.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
         
         Args:
             data_type (str): Tipo de dato del atributo
@@ -723,7 +768,9 @@ class SQLTableManager:
         """
         data_type_upper = data_type.upper()
         
-        if 'INT' in data_type_upper:
+        if data_type_upper == 'POINT':
+            return Point(0.0, 0.0)  # Punto origen como valor por defecto
+        elif 'INT' in data_type_upper:
             return 0
         elif 'DECIMAL' in data_type_upper or 'FLOAT' in data_type_upper or 'DOUBLE' in data_type_upper:
             return 0.0
@@ -751,7 +798,7 @@ class SQLTableManager:
         
         # Expresión regular mejorada para capturar atributos con sus tipos, claves e índices
         attribute_pattern = re.compile(
-            r"\s*(\w+)\s+([A-Za-z_\d\[\]]+)"        # Nombre y tipo de dato (como VARCHAR[50] o ARRAY[FLOAT])
+            r"\s*(\w+)\s+([A-Za-z_\d\[\]]+)"        # Nombre y tipo de dato (como VARCHAR[50] o POINT)
             r"(?:\s+(PRIMARY\s+KEY|KEY))?"          # PRIMARY KEY o KEY
             r"(?:\s+INDEX\s+(\w+))?"                # INDEX con tipo (como BTree)
             r"(?:\s+SEQ)?"                          # SEQ opcional
@@ -811,6 +858,7 @@ class SQLTableManager:
         """
         Analiza una instrucción SQL INSERT INTO para extraer el nombre de la tabla
         y los valores a insertar.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
         
         Args:
             sql_statement (str): La instrucción SQL INSERT INTO.
@@ -1056,6 +1104,7 @@ class SQLTableManager:
         """
         Analiza una cláusula WHERE y la separa en búsquedas exactas y por rango.
         VERSIÓN ACTUALIZADA que soporta operadores de comparación: >, <, >=, <=
+        Y maneja tipo POINT correctamente.
         
         Soporta:
         - attr=value
@@ -1156,6 +1205,7 @@ class SQLTableManager:
     def _comparison_to_range(self, attr_name, operator, value, table_name):
         """
         Convierte un operador de comparación a un rango para búsqueda.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
         
         Args:
             attr_name (str): Nombre del atributo
@@ -1176,6 +1226,11 @@ class SQLTableManager:
                 min_val = value + epsilon
                 max_val = self._get_max_value_for_type(data_type)
                 return [attr_name, min_val, max_val]
+            elif isinstance(value, Point):
+                # Para Point, usar distancia al origen + epsilon
+                min_val = Point(value.x + 0.01, value.y + 0.01)
+                max_val = self._get_max_value_for_type(data_type)
+                return [attr_name, min_val, max_val]
         
         elif operator == '>=':
             # attr >= value → rango desde value hasta infinito
@@ -1188,6 +1243,10 @@ class SQLTableManager:
                 epsilon = 0.01 if isinstance(value, float) else 1
                 min_val = self._get_min_value_for_type(data_type)
                 max_val = value - epsilon
+                return [attr_name, min_val, max_val]
+            elif isinstance(value, Point):
+                min_val = self._get_min_value_for_type(data_type)
+                max_val = Point(value.x - 0.01, value.y - 0.01)
                 return [attr_name, min_val, max_val]
         
         elif operator == '<=':
@@ -1214,8 +1273,11 @@ class SQLTableManager:
     def _get_max_value_for_type(self, data_type):
         """
         Obtiene el valor máximo para un tipo de dato.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
         """
-        if 'INT' in data_type:
+        if data_type == 'POINT':
+            return Point(999999.0, 999999.0)  # Punto máximo
+        elif 'INT' in data_type:
             return 2147483647  # INT máximo
         elif 'DECIMAL' in data_type or 'FLOAT' in data_type:
             return 999999999.99  # Decimal grande
@@ -1227,8 +1289,11 @@ class SQLTableManager:
     def _get_min_value_for_type(self, data_type):
         """
         Obtiene el valor mínimo para un tipo de dato.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
         """
-        if 'INT' in data_type:
+        if data_type == 'POINT':
+            return Point(-999999.0, -999999.0)  # Punto mínimo
+        elif 'INT' in data_type:
             return -2147483648  # INT mínimo
         elif 'DECIMAL' in data_type or 'FLOAT' in data_type:
             return -999999999.99  # Decimal pequeño
@@ -1274,6 +1339,7 @@ class SQLTableManager:
     def _convert_value(self, value_str, table_name, column_name):
         """
         Convierte un valor de string al tipo adecuado según la definición de la columna.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
         
         Args:
             value_str (str): Valor como string.
@@ -1303,7 +1369,10 @@ class SQLTableManager:
         
         # Convertir según el tipo de dato
         try:
-            if 'INT' in data_type:
+            if data_type == 'POINT':
+                # Convertir string a Point
+                return Point.from_string(value_str)
+            elif 'INT' in data_type:
                 return int(value_str)
             elif 'DECIMAL' in data_type or 'FLOAT' in data_type or 'DOUBLE' in data_type:
                 return float(value_str)
@@ -1316,6 +1385,7 @@ class SQLTableManager:
             # Si hay un error de conversión, devolver el valor original
             return value_str
     
+    # Resto de métodos siguen siendo los mismos...
     def get_table(self, table_name):
         """
         Obtiene la información de una tabla específica.

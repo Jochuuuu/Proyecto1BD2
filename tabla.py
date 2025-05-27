@@ -6,12 +6,13 @@ from pathlib import Path
 from estructuras.hash import ExtendibleHashFile
 from estructuras.avl import AVLFile
 from estructuras.btree import BPlusTree
+from estructuras.point_class import Point 
 
 class TableStorageManager:
     """
     Gestiona una tabla de almacenamiento con registros adaptados según los atributos de la tabla
     usando una estrategia de lista libre para reutilizar registros eliminados.
-    Versión actualizada con soporte completo para DELETE.
+    VERSIÓN ACTUALIZADA con soporte completo para tipo POINT.
     """
     
     # Constantes para los valores especiales de 'next'
@@ -25,7 +26,8 @@ class TableStorageManager:
         'CHAR': 's',        # Char de longitud fija
         'VARCHAR': 's',     # Varchar de longitud fija
         'BOOL': '?',        # 1 byte para booleanos
-        'DATE': 'I'         # 4 bytes para fechas (timestamp)
+        'DATE': 'I',        # 4 bytes para fechas (timestamp)
+        'POINT': 'dd'       # 16 bytes para punto 2D (dos doubles: x, y)
     }
     
     # Tamaños por defecto para los tipos de datos (en bytes)
@@ -33,7 +35,8 @@ class TableStorageManager:
         'INT': 4,
         'DECIMAL': 8,
         'BOOL': 1,
-        'DATE': 4
+        'DATE': 4,
+        'POINT': 16   
     }
     
     def __init__(self, table_name, table_info, base_dir='tablas'):
@@ -101,10 +104,12 @@ class TableStorageManager:
                     print(f"Advertencia: Tipo de índice '{attr['index']}' no soportado para {attr['name']}, usando AVL")
                     index_type = 'avl'
                 
+                real_attr_index = self._calculate_real_attr_index_for_index(attr_index)
+
                 # Parámetros comunes
                 index_params = {
                     'record_format': self.record_format,
-                    'index_attr': attr_index,
+                    'index_attr': real_attr_index,
                     'table_name': self.table_name,
                     'is_key': attr.get('is_key', False)
                 }
@@ -116,10 +121,37 @@ class TableStorageManager:
         # Crear el archivo si no existe
         if not os.path.exists(self.filename):
             self._initialize_file()
-    
+    def _calculate_real_attr_index_for_index(self, logical_attr_index):
+        """
+        Calcula el índice real del atributo considerando que los campos POINT
+        ocupan 2 posiciones en el struct, pero se cuentan como 1 atributo lógico.
+        
+        Args:
+            logical_attr_index (int): Índice lógico del atributo (1-based)
+            
+        Returns:
+            int: Índice real para usar en los índices (1-based)
+        """
+        real_position = 0
+        
+        # Iterar hasta el atributo solicitado (excluido)
+        for i in range(logical_attr_index - 1):  # -1 porque logical_attr_index es 1-based
+            if i < len(self.table_info['attributes']):
+                attr_type = self.table_info['attributes'][i]['data_type'].upper()
+                if attr_type == 'POINT':
+                    real_position += 2  # POINT ocupa 2 posiciones (x, y)
+                else:
+                    real_position += 1  # Otros tipos ocupan 1 posición
+            else:
+                real_position += 1
+        
+        # Retornar posición real + 1 (porque los índices esperan 1-based)
+        return real_position + 1
+
     def _get_format_for_attribute(self, attr):
         """
         Obtiene el formato de struct y tamaño para un atributo.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
         
         Args:
             attr: Diccionario con información del atributo
@@ -129,8 +161,12 @@ class TableStorageManager:
         """
         data_type = attr['data_type'].upper()
         
-        size_match = re.match(r'(VARCHAR|CHAR)\[(\d+)\]', data_type)
+        # Manejar tipo POINT específicamente
+        if data_type == 'POINT':
+            return self.TYPE_FORMATS['POINT'], self.TYPE_SIZES['POINT']
         
+        # Manejar VARCHAR y CHAR con tamaño específico
+        size_match = re.match(r'(VARCHAR|CHAR)\[(\d+)\]', data_type)
         if size_match:
             base_type = size_match.group(1)
             size = int(size_match.group(2))
@@ -148,7 +184,13 @@ class TableStorageManager:
         """Inicializa el archivo con un encabezado que indica que no hay registros eliminados."""
         with open(self.filename, 'wb') as f:
             f.write(struct.pack(self.header_format, -1))
-            
+            metadata_file = self._get_metadata_path()
+            with open(metadata_file, 'w') as mf:
+                json.dump(self.table_info, mf, indent=2)
+
+    def _get_metadata_path(self):
+        """Obtiene la ruta del archivo de metadatos."""
+        return os.path.join(self.base_dir, f"{self.table_name}_meta.json") 
            
     
     def _read_header(self):
@@ -170,7 +212,10 @@ class TableStorageManager:
         return self.header_size + (id - 1) * self.record_size
     
     def _read_record(self, id):
-        """Lee un registro específico por su id."""
+        """
+        Lee un registro específico por su id.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
+        """
         position = self._get_record_position(id)
         
         with open(self.filename, 'rb') as f:
@@ -183,19 +228,35 @@ class TableStorageManager:
             # Desempaquetar los datos en una lista
             unpacked_data = list(struct.unpack(self.record_format, record_data))
             
-            # Convertir los valores de tipo string (eliminando padding)
+            # Convertir los valores según el tipo
             result = {}
             data_index = 0
             
             for attr in self.table_info['attributes']:
-                value = unpacked_data[data_index]
+                attr_name = attr['name']
+                data_type = attr['data_type'].upper()
                 
-                # Convertir strings y eliminar padding
-                if attr['data_type'].upper().startswith(('VARCHAR', 'CHAR')):
+                if data_type == 'POINT':
+                    # Para POINT, tomar dos valores consecutivos (x, y)
+                    if data_index + 1 < len(unpacked_data):
+                        x_value = unpacked_data[data_index]
+                        y_value = unpacked_data[data_index + 1]
+                        value = Point(x_value, y_value)
+                        data_index += 2  # Saltar dos posiciones para POINT
+                    else:
+                        value = Point(0.0, 0.0)  # Valor por defecto
+                        data_index += 2
+                elif data_type.startswith(('VARCHAR', 'CHAR')):
+                    # Convertir strings y eliminar padding
+                    value = unpacked_data[data_index]
                     value = value.decode('utf-8').rstrip('\x00')
+                    data_index += 1
+                else:
+                    # Otros tipos de datos
+                    value = unpacked_data[data_index]
+                    data_index += 1
                 
-                result[attr['name']] = value
-                data_index += 1
+                result[attr_name] = value
             
             # El último valor siempre es el puntero 'next'
             result['next'] = unpacked_data[-1]
@@ -205,6 +266,7 @@ class TableStorageManager:
     def _pack_record_data(self, record_data):
         """
         Empaqueta los datos de un registro para almacenarlos.
+        VERSIÓN ACTUALIZADA que maneja tipo POINT.
         
         Args:
             record_data: Diccionario con los datos del registro
@@ -214,22 +276,48 @@ class TableStorageManager:
         """
         values = []
         
-        # Empaquetar cada atributo en el orden definido en table_info
         for attr in self.table_info['attributes']:
             attr_name = attr['name']
+            data_type = attr['data_type'].upper()
             value = record_data.get(attr_name)
             
             # Convertir según el tipo de dato
-            if attr['data_type'].upper().startswith(('VARCHAR', 'CHAR')):
-                size_match = re.match(r'(VARCHAR|CHAR)\[(\d+)\]', attr['data_type'].upper())
+            if data_type == 'POINT':
+                # Para POINT, extraer x e y y añadir ambos valores
+                if isinstance(value, Point):
+                    values.append(value.x)
+                    values.append(value.y)
+                elif isinstance(value, (list, tuple)) and len(value) >= 2:
+                    # Si viene como lista o tupla, usar los primeros dos elementos
+                    values.append(float(value[0]))
+                    values.append(float(value[1]))
+                elif isinstance(value, str):
+                    # Si viene como string, intentar parsearlo como Point
+                    try:
+                        point = Point.from_string(value)
+                        values.append(point.x)
+                        values.append(point.y)
+                    except:
+                        # Si falla el parsing, usar valores por defecto
+                        values.append(0.0)
+                        values.append(0.0)
+                else:
+                    # Valor por defecto para POINT
+                    values.append(0.0)
+                    values.append(0.0)
+                    
+            elif data_type.startswith(('VARCHAR', 'CHAR')):
+                size_match = re.match(r'(VARCHAR|CHAR)\[(\d+)\]', data_type)
                 if size_match:
                     size = int(size_match.group(2))
                     # Asegurar que es una cadena y codificarla
                     if not isinstance(value, str):
                         value = str(value)
                     value = value.encode('utf-8')[:size].ljust(size, b'\x00')
-            
-            values.append(value)
+                values.append(value)
+            else:
+                # Otros tipos de datos
+                values.append(value)
         
         # Añadir el valor de 'next'
         values.append(record_data.get('next', self.RECORD_NORMAL))
@@ -303,6 +391,7 @@ class TableStorageManager:
     def insert(self, record_data):
         """
         Inserta un nuevo registro, reutilizando espacios eliminados si están disponibles.
+        VERSIÓN ACTUALIZADA que maneja validación de tipos incluyendo POINT.
         
         Args:
             record_data: Diccionario con los datos del registro
@@ -310,12 +399,14 @@ class TableStorageManager:
         Returns:
             ID del registro insertado
         """
+        validated_record = self._validate_and_convert_record(record_data)
+        
         for attr in self.table_info['attributes']:
-            if attr['name'] not in record_data:
+            if attr['name'] not in validated_record:
                 raise ValueError(f"Falta el atributo {attr['name']} en los datos del registro")
             
         if self.primary_key_attr in self.indices:
-            primary_key_value = record_data[self.primary_key_attr]
+            primary_key_value = validated_record[self.primary_key_attr]
             index = self.indices[self.primary_key_attr]
             
             existing_records = index.search(primary_key_value)
@@ -333,21 +424,59 @@ class TableStorageManager:
             
             record_id = cabecera
             
-            record_data['next'] = self.RECORD_NORMAL
+            validated_record['next'] = self.RECORD_NORMAL
             
-            self._write_record(record_id, record_data)
+            self._write_record(record_id, validated_record)
         else:
             record_count = self._get_record_count()
             record_id = record_count + 1
             
-            record_data['next'] = self.RECORD_NORMAL
+            validated_record['next'] = self.RECORD_NORMAL
             
-            self._write_record(record_id, record_data)
+            self._write_record(record_id, validated_record)
         
         for attr_name, index in self.indices.items():
             index.insert_record(record_id)
 
         return record_id
+
+    def _validate_and_convert_record(self, record_data):
+        """
+        Valida y convierte los tipos de datos del registro incluyendo POINT.
+        
+        Args:
+            record_data: Diccionario con los datos del registro
+            
+        Returns:
+            dict: Registro con tipos validados y convertidos
+        """
+        validated_record = {}
+        
+        for attr in self.table_info['attributes']:
+            attr_name = attr['name']
+            data_type = attr['data_type'].upper()
+            value = record_data.get(attr_name)
+            
+            if data_type == 'POINT':
+                # Convertir a objeto Point si no lo es ya
+                if isinstance(value, Point):
+                    validated_record[attr_name] = value
+                elif isinstance(value, (list, tuple)) and len(value) >= 2:
+                    validated_record[attr_name] = Point(float(value[0]), float(value[1]))
+                elif isinstance(value, str):
+                    try:
+                        validated_record[attr_name] = Point.from_string(value)
+                    except:
+                        validated_record[attr_name] = Point(0.0, 0.0)
+                elif isinstance(value, dict) and 'x' in value and 'y' in value:
+                    validated_record[attr_name] = Point(float(value['x']), float(value['y']))
+                else:
+                    validated_record[attr_name] = Point(0.0, 0.0)
+            else:
+                # Para otros tipos, usar el valor tal como viene
+                validated_record[attr_name] = value
+        
+        return validated_record
 
     def delete(self, id):
         """
@@ -366,9 +495,7 @@ class TableStorageManager:
         
         if record['next'] != self.RECORD_NORMAL:
             return False
-        
        
-        
         cabecera = self._read_header()
         
         record['next'] = cabecera
@@ -377,7 +504,6 @@ class TableStorageManager:
         self._write_header(id)
         
         return True
-
 
     def delete_records(self, record_numbers):
         """
@@ -394,119 +520,46 @@ class TableStorageManager:
             print("No hay registros para eliminar")
             return 0
         
-        
         deleted_count = 0
         failed_records = []
         
         for record_num in record_numbers:
             try:
-                
                 record = self._read_record(record_num)
                 if not record or record.get('next') != self.RECORD_NORMAL:
-                    #print(f"Registro {record_num} no existe o ya fue eliminado")
                     failed_records.append(record_num)
                     continue
                 
-                #print(f"Registro a eliminar: {dict((k, v) for k, v in record.items() if k != 'next')}")
-                '''
-
-                print(f"\n🔍 ESTADO DE ÍNDICES ANTES DE ELIMINAR REGISTRO {record_num}:")
-                for attr_name, index in self.indices.items():
-                    attr_value = record.get(attr_name)
-                    print(f" indice {attr_name} (valor: '{attr_value}'):")
-                    
-                    if hasattr(index, 'search'):
-                        results = index.search(attr_value)
-                        print(f" Busqueda de '{attr_value}': {results}")
-                        if record_num in results:
-                            print(f" Registro {record_num} SÍ está en el índice")
-                        else:
-                            print(f" Registro {record_num} NO está en el índice")
-                '''
-
                 indices_success = True
                 
                 for attr_name, index in self.indices.items():
                     try:
                         if hasattr(index, 'delete_record'):
-                            if attr_name == 'nombre': 
-                                result = index.delete_record(record_num)
-                            else:
-                                result = index.delete_record(record_num)
-                            '''
-                            if result is not None:
-                                #print(f" Eliminado del índice {attr_name}")
-                            else:
-                                #print(f" No se encontró en el índice {attr_name}") '''
+                            result = index.delete_record(record_num)
                         else:
-                            '''
                             if isinstance(index, dict) and attr_name in record:
                                 value = record[attr_name]
                                 if value in index and record_num in index[value]:
                                     index[value].remove(record_num)
                                     if not index[value]:
                                         del index[value]
-                                    print(f"Eliminado del indice {attr_name} (legacy)")
-                                else:
-                                    print(f"No se encontró en indice {attr_name} (legacy)")
-                            else:
-                                print(f" Tipo de indice no soportado: {type(index).__name__}") '''
-                            print("no deberia llegar aqui")
-                                
+                                        
                     except Exception as e:
                         print(f"  Error al eliminar del índice {attr_name}: {e}")
                         indices_success = False
-                '''
-                print(f"\nESTADO DE ÍNDICES DESPUÉS DE ELIMINAR REGISTRO {record_num}:")
-                for attr_name, index in self.indices.items():
-                    attr_value = record.get(attr_name)
-                    print(f"Índice {attr_name} (valor: '{attr_value}'):")
-                    if hasattr(index, 'search'):
-                        results = index.search(attr_value)
-                        print(f" Búsqueda de '{attr_value}': {results}")
-                        if record_num in results:
-                            print(f" ERROR: Registro {record_num} AÚN está en el índice")
-                        else:
-                            print(f"Registro {record_num} correctamente eliminado del índice")
-                    
-                    if hasattr(index, 'print_tree'):
-                        index.print_tree()
-                '''
+                
                 if indices_success:
                     if self.delete(record_num):
-                        #print(f"Registro {record_num} eliminado exitosamente")
                         deleted_count += 1
                     else:
-                        #print(f" Error al marcar registro {record_num} como eliminado")
                         failed_records.append(record_num)
                 else:
-                    #print(f" No se pudo eliminar de todos los indices, registro {record_num} no eliminado")
                     failed_records.append(record_num)
                     
             except Exception as e:
                 print(f"Error general al eliminar registro {record_num}: {e}")
                 failed_records.append(record_num)
         
-        '''
-        for attr_name, index in self.indices.items():
-            
-            if hasattr(index, 'print_tree'):
-                index.print_tree()
-            elif hasattr(index, 'print_file_structure'):
-                print(f" Estructura del archivo:")
-                index.print_file_structure()
-            elif isinstance(index, dict):
-                print(f"   Contenido del diccionario:")
-                if index:
-                    for value, record_ids in index.items():
-                        print(f" '{value}': {record_ids}")
-                else:
-                    print(f"(vacío)") '''
-        '''
-        if failed_records:
-            print(f"\nRegistros que no pudieron eliminarse: {failed_records}") '''
-        
-        #print(f"\n Total eliminados: {deleted_count}/{len(record_numbers)}")
         return deleted_count
 
     def _remove_from_all_indices(self, record, record_num):
@@ -517,15 +570,11 @@ class TableStorageManager:
             record (dict): Datos del registro
             record_num (int): Número del registro
         """
-        #print(f"  Eliminando registro {record_num} de los índices...")
-        
         for attr_name, index in self.indices.items():
             try:
                 if hasattr(index, 'delete_record'):
                     result = index.delete_record(record_num)
-                    
                 else:
-                   
                     if attr_name in record:
                         value = record[attr_name]
                         if value in index and record_num in index[value]:
@@ -533,22 +582,14 @@ class TableStorageManager:
                             if not index[value]:
                                 del index[value]
                             
-                            
             except Exception as e:
                 print(f" Error al eliminar del índice {attr_name}: {e}")
 
+    # Resto de métodos permanecen igual...
     def select(self, lista_busquedas=None, lista_rangos=None, requested_attributes=None):
         """
         Busca registros que cumplan todas las condiciones especificadas.
         Si no hay condiciones, retorna TODOS los registros.
-        
-        Args:
-            lista_busquedas: Lista de búsquedas exactas en formato [["atributo", valor], ...]
-            lista_rangos: Lista de búsquedas por rango en formato [["atributo", min_val, max_val], ...]
-            requested_attributes: Lista de atributos a retornar. Si es None, retorna todos.
-            
-        Returns:
-            dict: Resultado con números de registro o información de errores
         """
         if not lista_busquedas and not lista_rangos:
             print("No hay condiciones WHERE - retornando todos los registros")
@@ -565,52 +606,45 @@ class TableStorageManager:
         # Procesar búsquedas exactas
         if lista_busquedas:
             for i, (attr_name, valor) in enumerate(lista_busquedas):
-                #print(f"Búsqueda exacta {i+1}: {attr_name} = {valor}")
+                # Convertir valor a tipo apropiado si es necesario
+                converted_value = self._convert_search_value(attr_name, valor)
                 
                 if attr_name in self.indices:
                     indice = self.indices[attr_name]
-                    resultados = indice.search(valor)
-                    
-                    #print(f"  Índice {attr_name} encontró: {resultados}")
+                    resultados = indice.search(converted_value)
                     
                     if not resultados:
-                        #print(f"  No hay resultados para {attr_name}={valor}")
                         return {"error": False, "numeros_registro": [], "requested_attributes": requested_attributes}
                     
                     conjuntos_resultados.append(set(resultados))
                     
                 else:
                     error_msg = f"No existe índice para {attr_name}"
-                    #print(f"  ERROR: {error_msg}")
                     errores.append({"error": True, "message": error_msg, "type": "no_index"})
         
         # Procesar búsquedas por rango
         if lista_rangos:
             for i, (attr_name, min_val, max_val) in enumerate(lista_rangos):
-                #print(f"Búsqueda por rango {i+1}: {attr_name} BETWEEN {min_val} AND {max_val}")
+                # Convertir valores a tipo apropiado si es necesario
+                converted_min = self._convert_search_value(attr_name, min_val)
+                converted_max = self._convert_search_value(attr_name, max_val)
                 
                 if attr_name in self.indices:
                     indice = self.indices[attr_name]
-                    resultado = indice.range_search(min_val, max_val)
+                    resultado = indice.range_search(converted_min, converted_max)
                     
                     # Verificar si es un error (índice no soporta rangos)
                     if isinstance(resultado, dict) and resultado.get("error", False):
-                        #print(f"  ERROR: {resultado['message']}")
                         errores.append(resultado)
                         continue
                     
-                    # Si no es error, debe ser lista de números de registro
-                    #print(f"  Índice {attr_name} encontró en rango: {resultado}")
-                    
                     if not resultado:
-                        #print(f"  No hay resultados en rango [{min_val}, {max_val}]")
                         return {"error": False, "numeros_registro": [], "requested_attributes": requested_attributes}
                     
                     conjuntos_resultados.append(set(resultado))
                     
                 else:
                     error_msg = f"No existe índice para {attr_name}"
-                   # print(f"  ERROR: {error_msg}")
                     errores.append({"error": True, "message": error_msg, "type": "no_index"})
         
         if errores:
@@ -636,13 +670,53 @@ class TableStorageManager:
                 print("  Intersección vacía, terminando")
                 return {"error": False, "numeros_registro": [], "requested_attributes": requested_attributes}
         
-        resultado_final = (list(interseccion_final))
+        resultado_final = list(interseccion_final)
         
         return {
             "error": False, 
             "numeros_registro": resultado_final,
             "requested_attributes": requested_attributes
         }
+
+    def _convert_search_value(self, attr_name, value):
+        """
+        Convierte un valor de búsqueda al tipo apropiado según el atributo.
+        
+        Args:
+            attr_name: Nombre del atributo
+            value: Valor a convertir
+            
+        Returns:
+            Valor convertido al tipo apropiado
+        """
+        # Buscar el tipo de dato del atributo
+        data_type = None
+        for attr in self.table_info['attributes']:
+            if attr['name'] == attr_name:
+                data_type = attr['data_type'].upper()
+                break
+        
+        if not data_type:
+            return value
+        
+        if data_type == 'POINT':
+            # Convertir a objeto Point si no lo es ya
+            if isinstance(value, Point):
+                return value
+            elif isinstance(value, (list, tuple)) and len(value) >= 2:
+                return Point(float(value[0]), float(value[1]))
+            elif isinstance(value, str):
+                try:
+                    return Point.from_string(value)
+                except:
+                    return Point(0.0, 0.0)
+            elif isinstance(value, dict) and 'x' in value and 'y' in value:
+                return Point(float(value['x']), float(value['y']))
+            else:
+                return Point(0.0, 0.0)
+        else:
+            # Para otros tipos, retornar el valor tal como viene
+            return value
 
     def _get_all_active_record_numbers(self):
         """
@@ -662,148 +736,6 @@ class TableStorageManager:
         print(f"Encontrados {len(active_records)} registros activos: {active_records}")
         return active_records
 
-   
-
-    def parse_sql_select(self, sql_statement):
-        """
-        Analiza una instrucción SQL SELECT y extrae las condiciones de búsqueda.
-        VERSIÓN CORREGIDA que maneja SELECT sin WHERE correctamente.
-        """
-        select_pattern = re.compile(
-            r"SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s*;)?$", 
-            re.IGNORECASE | re.DOTALL
-        )
-        
-        match = select_pattern.match(sql_statement.strip())
-        if not match:
-            return {
-                "error": True,
-                "message": "Formato de SELECT no válido"
-            }
-        
-        columns_str = match.group(1).strip()
-        table_name = match.group(2)
-        where_clause = match.group(3)  #  None si no hay WHERE
-        
-        if table_name not in self.tables:
-            return {
-                "error": True,
-                "message": f"La tabla '{table_name}' no existe"
-            }
-        
-        requested_attributes = []
-        if columns_str == "*":
-            requested_attributes = [attr['name'] for attr in self.tables[table_name]['attributes']]
-        else:
-            attr_names = [attr.strip() for attr in columns_str.split(',')]
-            
-            table_attributes = {attr['name'] for attr in self.tables[table_name]['attributes']}
-            
-            for attr_name in attr_names:
-                if attr_name not in table_attributes:
-                    return {
-                        "error": True,
-                        "message": f"El atributo '{attr_name}' no existe en la tabla '{table_name}'"
-                    }
-            
-            requested_attributes = attr_names
-        
-        lista_busquedas = []
-        lista_rangos = []
-        
-        if where_clause:  
-            try:
-                lista_busquedas, lista_rangos = self._parse_where_with_ranges(where_clause, table_name)
-            except Exception as e:
-                return {
-                    "error": True,
-                    "message": f"Error al parsear condiciones WHERE: {str(e)}"
-                }
-        else:
-            print("SELECT sin WHERE - se retornarán todos los registros")
-        
-        return {
-            'error': False,
-            'table_name': table_name,
-            'columns': columns_str,
-            'requested_attributes': requested_attributes,
-            'lista_busquedas': lista_busquedas,
-            'lista_rangos': lista_rangos
-        }
-
-
-    
-    def has_select_error(self, resultado_select):
-        """
-        Verifica si el resultado de select() contiene errores.
-        
-        Args:
-            resultado_select: Resultado del método select()
-            
-        Returns:
-            bool: True si hay errores, False si es exitoso
-        """
-        return resultado_select.get("error", False)
-
-    def get_select_errors(self, resultado_select):
-        """
-        Obtiene la lista de errores del resultado de select().
-        
-        Args:
-            resultado_select: Resultado del método select()
-            
-        Returns:
-            list: Lista de errores o lista vacía si no hay errores
-        """
-        if not self.has_select_error(resultado_select):
-            return []
-        
-        return resultado_select.get("errores", [])
-
-    def get_select_records(self, resultado_select):
-        """
-        Obtiene los números de registro del resultado de select().
-        
-        Args:
-            resultado_select: Resultado del método select()
-            
-        Returns:
-            list: Lista de números de registro o lista vacía si hay errores
-        """
-        if self.has_select_error(resultado_select):
-            return []
-        
-        return resultado_select.get("numeros_registro", [])
-    
-    def update(self, id, record_data):
-        """
-        Actualiza un registro existente.
-        
-        Args:
-            id: ID del registro a actualizar
-            record_data: Diccionario con los datos actualizados
-            
-        Returns:
-            True si se actualizó correctamente, False si no se encontró
-        """
-        current_record = self._read_record(id)
-        if not current_record or current_record['next'] != self.RECORD_NORMAL:
-            return False
-        
-        # Eliminar de los índices antes de actualizar
-        self._remove_from_indices(current_record, id)
-        
-        # Actualizar los datos manteniendo el campo 'next'
-        updated_record = {**current_record, **record_data, 'next': current_record['next']}
-        
-        # Escribir el registro actualizado
-        self._write_record(id, updated_record)
-        
-        # Actualizar los índices con los nuevos datos
-        self._update_indices(updated_record, id)
-        
-        return True
-    
     def get(self, id):
         """
         Obtiene un registro por su ID.
@@ -822,22 +754,96 @@ class TableStorageManager:
         # Eliminar el campo 'next' para devolver solo los atributos de la tabla
         del record['next']
         return record
-    
-    def find_by_attribute(self, attr_name, value):
+
+    def print_select_results(self, resultado, title="Resultados SELECT"):
         """
-        Busca registros por un atributo específico.
+        Imprime los resultados de un SELECT incluyendo manejo de objetos Point.
         
         Args:
-            attr_name: Nombre del atributo por el que buscar
-            value: Valor a buscar
-            
-        Returns:
-            Lista de registros que coinciden con la búsqueda
+            resultado: Resultado del método select()
+            title: Título para mostrar
         """
+        print(f"\n{title}")
+        print("=" * 50)
+        
+        if resultado.get("error", False):
+            print("❌ Error en la consulta:")
+            print(f"   {resultado.get('message', 'Error desconocido')}")
+            if "errores" in resultado:
+                for error in resultado["errores"]:
+                    print(f"   - {error.get('message', 'Error')}")
+            return
+        
+        record_numbers = resultado.get("numeros_registro", [])
+        requested_attributes = resultado.get("requested_attributes", [])
+        
+        if not record_numbers:
+            print("📭 No se encontraron registros que cumplan las condiciones")
+            return
+        
+        print(f"📊 Se encontraron {len(record_numbers)} registro(s)")
+        print(f"🎯 Números de registro: {record_numbers}")
+        
+        if requested_attributes:
+            print(f"📋 Atributos solicitados: {requested_attributes}")
+        
+        # Mostrar los datos de los registros
+        print("\n📄 Datos de los registros:")
+        for i, record_num in enumerate(record_numbers, 1):
+            record = self.get(record_num)
+            if record:
+                print(f"\n   Registro #{record_num}:")
+                
+                # Filtrar por atributos solicitados si se especificaron
+                attrs_to_show = requested_attributes if requested_attributes else record.keys()
+                
+                for attr_name in attrs_to_show:
+                    if attr_name in record:
+                        value = record[attr_name]
+                        # Formatear objetos Point de manera legible
+                        if isinstance(value, Point):
+                            print(f"     {attr_name}: {value}")
+                        else:
+                            print(f"     {attr_name}: {value}")
+                    else:
+                        print(f"     {attr_name}: (no encontrado)")
+        
+        print()
+
+    # Resto de métodos siguen siendo los mismos...
+    def update(self, id, record_data):
+        """Actualiza un registro existente."""
+        current_record = self._read_record(id)
+        if not current_record or current_record['next'] != self.RECORD_NORMAL:
+            return False
+        
+        # Eliminar de los índices antes de actualizar
+        self._remove_from_indices(current_record, id)
+        
+        # Validar y convertir los nuevos datos
+        validated_data = self._validate_and_convert_record(record_data)
+        
+        # Actualizar los datos manteniendo el campo 'next'
+        updated_record = {**current_record, **validated_data, 'next': current_record['next']}
+        
+        # Escribir el registro actualizado
+        self._write_record(id, updated_record)
+        
+        # Actualizar los índices con los nuevos datos
+        self._update_indices(updated_record, id)
+        
+        return True
+
+    def find_by_attribute(self, attr_name, value):
+        """Busca registros por un atributo específico."""
+        # Convertir valor al tipo apropiado
+        converted_value = self._convert_search_value(attr_name, value)
+        
         # Si existe un índice para este atributo, usarlo
-        if attr_name in self.indices and value in self.indices[attr_name]:
+        if attr_name in self.indices:
             result = []
-            for record_id in self.indices[attr_name][value]:
+            record_ids = self.indices[attr_name].search(converted_value)
+            for record_id in record_ids:
                 record = self.get(record_id)
                 if record:
                     result.append(record)
@@ -851,30 +857,32 @@ class TableStorageManager:
             record = self._read_record(i)
             if (record and 
                 record['next'] == self.RECORD_NORMAL and 
-                attr_name in record and 
-                record[attr_name] == value):
+                attr_name in record):
                 
-                # Eliminar el campo 'next' para devolver solo los atributos de la tabla
-                record_copy = record.copy()
-                del record_copy['next']
-                result.append(record_copy)
+                # Comparar considerando objetos Point
+                record_value = record[attr_name]
+                try:
+                    if record_value == converted_value:
+                        record_copy = record.copy()
+                        del record_copy['next']
+                        result.append(record_copy)
+                except:
+                    # Si la comparación falla, convertir a string
+                    if str(record_value) == str(converted_value):
+                        record_copy = record.copy()
+                        del record_copy['next']
+                        result.append(record_copy)
         
         return result
     
     def get_all_records(self):
-        """
-        Obtiene todos los registros no eliminados.
-        
-        Returns:
-            Lista de diccionarios con los datos de los registros
-        """
+        """Obtiene todos los registros no eliminados."""
         record_count = self._get_record_count()
         result = []
         
         for i in range(1, record_count + 1):
             record = self._read_record(i)
             if record and record['next'] == self.RECORD_NORMAL:
-                # Eliminar el campo 'next' para devolver solo los atributos de la tabla
                 record_copy = record.copy()
                 del record_copy['next']
                 result.append(record_copy)
@@ -892,4 +900,3 @@ class TableStorageManager:
             record = self._read_record(i)
             if record and record['next'] == self.RECORD_NORMAL:
                 self._update_indices(record, i)
-

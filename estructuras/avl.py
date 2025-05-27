@@ -1,6 +1,8 @@
 import struct
 import os
 import re
+import json
+from estructuras.point_class import Point  
 
 class AVLFile:
     def __init__(self, record_format="<i50sdii", index_attr=2, table_name="Productos", is_key=False):
@@ -8,6 +10,9 @@ class AVLFile:
         self.index_attr = index_attr  # El atributo a indexar (2 = nombre)
         self.table_name = table_name
         self.is_key = is_key  # Indica si el atributo es una clave (no permite duplicados)
+        
+        # Cargar metadata de la tabla para obtener información de tipos
+        self.table_metadata = self._load_table_metadata()
         
         # Analizar el formato para determinar los tipos de campo
         self.field_types = self._parse_format(record_format)
@@ -34,6 +39,47 @@ class AVLFile:
                 # Inicializar cabecera con root=0, header=-1 (lista vacía)
                 f.write(struct.pack(self.header_format, 0, -1))
 
+    def _load_table_metadata(self):
+        """
+        Carga los metadatos de la tabla desde el archivo _meta.json
+        
+        Returns:
+            dict: Metadatos de la tabla o None si no se puede cargar
+        """
+        metadata_path = f"tablas/{self.table_name}_meta.json"
+        
+        try:
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                print(f"Advertencia: No se encontró el archivo de metadatos {metadata_path}")
+                return None
+        except Exception as e:
+            print(f"Error al cargar metadatos: {e}")
+            return None
+
+    def _get_attribute_type(self, attr_index):
+        """
+        Obtiene el tipo de dato del atributo según los metadatos.
+        
+        Args:
+            attr_index (int): Índice del atributo (empezando desde 1)
+            
+        Returns:
+            str: Tipo de dato del atributo
+        """
+        if not self.table_metadata or 'attributes' not in self.table_metadata:
+            return 'UNKNOWN'
+        
+        attributes = self.table_metadata['attributes']
+        
+        # attr_index empieza desde 1, pero el array desde 0
+        if 1 <= attr_index <= len(attributes):
+            return attributes[attr_index - 1]['data_type'].upper()
+        
+        return 'UNKNOWN'
+
     def _parse_format(self, format_str):
         """Analiza el formato del registro para determinar los tipos de cada campo."""
         # Patrón para extraer los tipos de campos del formato
@@ -54,14 +100,13 @@ class AVLFile:
                 field_types.append('unknown')
         
         return field_types
+    
+    
 
     def get_attribute_from_record_num(self, record_num):
         """
         Obtiene el valor del atributo indexado desde un número de registro en el archivo de tablas.
-        Args:
-            record_num (int): Número de registro (empezando desde 1)
-        Returns:
-            El valor del atributo indexado, o None si hay error
+        VERSIÓN CORREGIDA que maneja tipos POINT correctamente sin depender de metadatos.
         """
         tabla_filename = f"tablas/{self.table_name}.bin"
         tabla_header_format = "<i"  # 4 bytes para la cabecera (int)
@@ -69,7 +114,6 @@ class AVLFile:
         
         try:
             with open(tabla_filename, 'rb') as f:
-                # Calcular la posición del registro
                 position = tabla_header_size + (record_num - 1) * self.record_size
                 f.seek(position)
                 
@@ -80,19 +124,30 @@ class AVLFile:
                     print(f"Error: No se pudo leer el registro {record_num}")
                     return None
                 
-                # Desempaquetar los datos usando el formato
                 unpacked_data = list(struct.unpack(self.record_format, record_data))
+               
                 
                 # Obtener el valor del atributo indexado (index_attr empezando desde 1)
                 if self.index_attr < 1 or self.index_attr > len(unpacked_data):
                     print(f"Error: index_attr {self.index_attr} fuera de rango")
                     return None
-                    
-                indexed_value = unpacked_data[self.index_attr - 1]
                 
-                # Convertir según el tipo de campo
-                field_type = self.field_types[self.index_attr - 1] if self.index_attr - 1 < len(self.field_types) else 'unknown'
-                if field_type == 'string':
+                current_index = self.index_attr - 1 
+                
+                if (current_index + 1 < len(unpacked_data) and 
+                    isinstance(unpacked_data[current_index], (int, float)) and
+                    isinstance(unpacked_data[current_index + 1], (int, float))):
+                    
+                    x_value = float(unpacked_data[current_index])
+                    y_value = float(unpacked_data[current_index + 1])
+                    
+                    point = Point(x_value, y_value)
+                    return point
+                
+                # Si no es Point, manejar como valor normal
+                indexed_value = unpacked_data[current_index]
+                
+                if isinstance(indexed_value, bytes):
                     indexed_value = indexed_value.decode('utf-8').rstrip('\0')
                 
                 return indexed_value
@@ -107,6 +162,8 @@ class AVLFile:
     def _compare_keys(self, record_num1, record_num2):
         """
         Compara dos números de registro basándose en el valor de sus atributos indexados.
+        VERSIÓN ACTUALIZADA que maneja objetos Point correctamente.
+        
         Retorna: -1 si attr1 < attr2, 0 si attr1 == attr2, 1 si attr1 > attr2
         """
         valor1 = self.get_attribute_from_record_num(record_num1)
@@ -115,12 +172,24 @@ class AVLFile:
         if valor1 is None or valor2 is None:
             return 0  # En caso de error, considerarlos iguales
         
-        if valor1 < valor2:
-            return -1
-        elif valor1 > valor2:
-            return 1
-        else:
-            return 0
+        # Usar las operaciones sobrecargadas de Point si son objetos Point
+        try:
+            if valor1 < valor2:
+                return -1
+            elif valor1 > valor2:
+                return 1
+            else:
+                return 0
+        except TypeError:
+            # Si la comparación falla, intentar comparar como strings
+            str1 = str(valor1)
+            str2 = str(valor2)
+            if str1 < str2:
+                return -1
+            elif str1 > str2:
+                return 1
+            else:
+                return 0
 
     def _read_header(self):
         with open(self.filename, 'rb') as f:
@@ -351,7 +420,12 @@ class AVLFile:
     def search(self, target_value):
         """
         Busca registros que tengan el valor específico en el atributo indexado.
-        target_value: valor del atributo a buscar (ej: 45.75 para precio)
+        VERSIÓN ACTUALIZADA que maneja búsquedas con objetos Point.
+        
+        Args:
+            target_value: valor del atributo a buscar (puede ser Point, int, string, etc.)
+        Returns:
+            list: Lista de números de registro que coinciden
         """
         header = self._read_header()
         root_index = header['root']
@@ -364,7 +438,12 @@ class AVLFile:
     def _search_rec(self, root_index, target_value, results):
         """
         Busca por valor de atributo, no por número de registro.
-        target_value: el valor del atributo a buscar (ej: precio 45.75)
+        VERSIÓN ACTUALIZADA que maneja comparaciones con objetos Point.
+        
+        Args:
+            root_index: Índice del nodo actual
+            target_value: el valor del atributo a buscar (puede ser Point, etc.)
+            results: lista para acumular resultados
         """
         if root_index == 0:
             return
@@ -375,23 +454,51 @@ class AVLFile:
         if current_value is None:
             return
         
-        if target_value < current_value:
-            self._search_rec(root_node['left'], target_value, results)
-        elif target_value > current_value:
-            self._search_rec(root_node['right'], target_value, results)
-        else:
-            # Encontramos un nodo con el valor buscado
-            results.append(root_node)
-            
-            # Si permite duplicados, buscar en AMBOS subárboles
-            # porque los duplicados pueden estar tanto a la izquierda como a la derecha
-            if not self.is_key:
+        try:
+            # Usar las operaciones sobrecargadas para comparar
+            if target_value < current_value:
                 self._search_rec(root_node['left'], target_value, results)
+            elif target_value > current_value:
                 self._search_rec(root_node['right'], target_value, results)
+            else:
+                # Encontramos un nodo con el valor buscado
+                results.append(root_node)
+                
+                # Si permite duplicados, buscar en AMBOS subárboles
+                # porque los duplicados pueden estar tanto a la izquierda como a la derecha
+                if not self.is_key:
+                    self._search_rec(root_node['left'], target_value, results)
+                    self._search_rec(root_node['right'], target_value, results)
+                    
+        except TypeError:
+            # Si la comparación falla, convertir a string y comparar
+            try:
+                target_str = str(target_value)
+                current_str = str(current_value)
+                
+                if target_str < current_str:
+                    self._search_rec(root_node['left'], target_value, results)
+                elif target_str > current_str:
+                    self._search_rec(root_node['right'], target_value, results)
+                else:
+                    results.append(root_node)
+                    if not self.is_key:
+                        self._search_rec(root_node['left'], target_value, results)
+                        self._search_rec(root_node['right'], target_value, results)
+            except:
+                # Si todo falla, saltar este nodo
+                pass
 
     def range_search(self, min_value, max_value):
         """
         Busca registros cuyos valores de atributo estén en el rango [min_value, max_value].
+        VERSIÓN CORREGIDA que maneja rangos con objetos Point correctamente.
+        
+        Args:
+            min_value: Valor mínimo del rango (puede ser Point, etc.)
+            max_value: Valor máximo del rango (puede ser Point, etc.)
+        Returns:
+            list: Lista de números de registro en el rango
         """
         header = self._read_header()
         root_index = header['root']
@@ -404,6 +511,7 @@ class AVLFile:
     def _range_search_rec(self, root_index, min_value, max_value, results):
         """
         Búsqueda por rango basada en valores de atributos.
+        VERSIÓN CORREGIDA que detecta tipo POINT de forma robusta.
         """
         if root_index == 0:
             return
@@ -414,22 +522,55 @@ class AVLFile:
         if current_value is None:
             return
 
-        # Si el valor mínimo del rango es menor que el nodo actual, buscar en el subárbol izquierdo
-        if min_value < current_value:
-            self._range_search_rec(root_node['left'], min_value, max_value, results)
+        is_point_type = isinstance(current_value, Point) and isinstance(min_value, Point) and isinstance(max_value, Point)
 
-        # Si el nodo actual está en el rango, añadirlo a los resultados
-        if min_value <= current_value <= max_value:
-            results.append(root_node)
+        try:
+            if is_point_type:
+                
+               
+                self._range_search_rec(root_node['left'], min_value, max_value, results)
+                
+                # Si el punto actual está en el rango rectangular, añadirlo
+                if current_value.is_in_range(min_value, max_value):
+                    results.append(root_node)
+                  
+                
+                # Buscar en subarbol derecho
+                self._range_search_rec(root_node['right'], min_value, max_value, results)
+                return
+            
+            
+            if min_value < current_value:
+                self._range_search_rec(root_node['left'], min_value, max_value, results)
 
-        # Si el valor máximo del rango es mayor o igual al nodo actual, buscar en el subárbol derecho
-        if current_value <= max_value:
-            self._range_search_rec(root_node['right'], min_value, max_value, results)
+            if min_value <= current_value <= max_value:
+                results.append(root_node)
+
+            if current_value <= max_value:
+                self._range_search_rec(root_node['right'], min_value, max_value, results)
+                
+        except TypeError:
+            try:
+                min_str = str(min_value)
+                max_str = str(max_value)
+                current_str = str(current_value)
+                
+                if min_str < current_str:
+                    self._range_search_rec(root_node['left'], min_value, max_value, results)
+
+                if min_str <= current_str <= max_str:
+                    results.append(root_node)
+
+                if current_str <= max_str:
+                    self._range_search_rec(root_node['right'], min_value, max_value, results)
+            except:
+                pass
+
 
     def delete_record(self, record_num):
         """
         Elimina un registro específico del índice AVL por su número de registro.
-        VERSIÓN DEFINITIVA que funciona con cualquier tipo de atributo.
+        VERSIÓN ACTUALIZADA que funciona con cualquier tipo de atributo incluyendo Point.
         
         Args:
             record_num (int): Número de registro a eliminar del índice
@@ -443,19 +584,15 @@ class AVLFile:
         if root_index == 0:
             return None
         
-        # Obtener el valor del atributo para este registro
         target_value = self.get_attribute_from_record_num(record_num)
         if target_value is None:
             return None
         
-        # Verificar que el registro existe en el árbol usando búsqueda completa
         if not self._search_record_in_subtree(root_index, record_num):
             return None
         
-        # Eliminar el registro del árbol
         new_root_index = self._delete_specific_record_rec(root_index, record_num, target_value)
         
-        # Actualizar el root_index en la cabecera
         header = self._read_header()
         self._write_header(new_root_index, header['header'])
         
@@ -479,11 +616,9 @@ class AVLFile:
         root_node = self._read_node(root_index)
         current_record_num = root_node['clave']
         
-        # Si encontramos el registro
         if current_record_num == target_record_num:
             return True
         
-        # Buscar en ambos subárboles (porque no sabemos dónde puede estar)
         found_left = self._search_record_in_subtree(root_node['left'], target_record_num)
         if found_left:
             return True
@@ -514,12 +649,9 @@ class AVLFile:
         if current_value is None:
             return root_index
         
-        # Si encontramos el registro exacto (mismo número Y mismo valor)
         if current_record_num == target_record_num and current_value == target_value:
-            # Eliminar este nodo
             return self._remove_node(root_index)
         
-        # Buscar en el subárbol apropiado basado en el valor del atributo
         if target_value < current_value:
             root_node['left'] = self._delete_specific_record_rec(root_node['left'], target_record_num, target_value)
             self._write_node(root_index, root_node)
@@ -527,13 +659,11 @@ class AVLFile:
             root_node['right'] = self._delete_specific_record_rec(root_node['right'], target_record_num, target_value)
             self._write_node(root_index, root_node)
         else:
-            # Mismo valor de atributo, pero diferente número de registro
-            # Buscar en ambos subárboles porque pueden haber duplicados
+            
             root_node['left'] = self._delete_specific_record_rec(root_node['left'], target_record_num, target_value)
             root_node['right'] = self._delete_specific_record_rec(root_node['right'], target_record_num, target_value)
             self._write_node(root_index, root_node)
         
-        # Rebalancear el árbol después de la eliminación
         return self._rebalance(root_index)
 
     def _remove_node(self, node_index):

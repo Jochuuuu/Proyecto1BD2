@@ -1,6 +1,8 @@
 import struct
 import os
 import re
+import json
+from estructuras.point_class import Point   
 
 FB = 5
 D = 5    
@@ -40,6 +42,9 @@ class ExtendibleHashFile:
         self.is_key = is_key  # Indica si el atributo es una clave (no permite duplicados)
         self.filename = f"tablas/{table_name}.bin"
         
+        # Cargar metadata de la tabla para obtener información de tipos
+        self.table_metadata = self._load_table_metadata()
+        
         # Analizar el formato para determinar los tipos de campo
         self.field_types = self._parse_format(record_format)
         
@@ -63,6 +68,47 @@ class ExtendibleHashFile:
         self.buckets_file = f"indices/{table_name}_{index_attr}_buckets.dat"
         
         self.init_files()
+
+    def _load_table_metadata(self):
+        """
+        Carga los metadatos de la tabla desde el archivo _meta.json
+        
+        Returns:
+            dict: Metadatos de la tabla o None si no se puede cargar
+        """
+        metadata_path = f"tablas/{self.table_name}_meta.json"
+        
+        try:
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                print(f"Advertencia: No se encontró el archivo de metadatos {metadata_path}")
+                return None
+        except Exception as e:
+            print(f"Error al cargar metadatos: {e}")
+            return None
+
+    def _get_attribute_type(self, attr_index):
+        """
+        Obtiene el tipo de dato del atributo según los metadatos.
+        
+        Args:
+            attr_index (int): Índice del atributo (empezando desde 1)
+            
+        Returns:
+            str: Tipo de dato del atributo
+        """
+        if not self.table_metadata or 'attributes' not in self.table_metadata:
+            return 'UNKNOWN'
+        
+        attributes = self.table_metadata['attributes']
+        
+        # attr_index empieza desde 1, pero el array desde 0
+        if 1 <= attr_index <= len(attributes):
+            return attributes[attr_index - 1]['data_type'].upper()
+        
+        return 'UNKNOWN'
     
     def _parse_format(self, format_str):
         """Analiza el formato del registro para determinar los tipos de cada campo."""
@@ -98,16 +144,23 @@ class ExtendibleHashFile:
         """
         return ((position - self.header_size) // self.record_size) + 1
     
+    
     def get_attribute_from_record_num(self, record_num):
         """
         Obtiene el valor del atributo indexado desde un número de registro.
+        VERSIÓN CORREGIDA que maneja strings VARCHAR correctamente.
         """
         position = self._get_record_position(record_num)
         return self.get_attribute_from_position(position)
-        
+
+    # =============================================================================
+    # MÉTODO 2: get_attribute_from_position (línea aproximada 200-300)
+    # =============================================================================
+
     def get_attribute_from_position(self, position):
         """
-        Obtiene el valor del atributo indexado desde una posición en bytes en el archivo.
+        Obtiene el valor del atributo indexado desde una posición en bytes.
+        VERSIÓN CORREGIDA que maneja strings VARCHAR y Point correctamente.
         """
         try:
             with open(self.filename, 'rb') as f:
@@ -121,43 +174,63 @@ class ExtendibleHashFile:
                 unpacked_data = list(struct.unpack(self.record_format, record_data))
                 
                 # Obtener el valor del atributo indexado
-                indexed_value = unpacked_data[self.index_attr - 1]
+                if self.index_attr < 1 or self.index_attr > len(unpacked_data):
+                    return None
                 
-                # Convertir según el tipo
-                field_type = self.field_types[self.index_attr - 1] if self.index_attr - 1 < len(self.field_types) else 'unknown'
-                if field_type == 'string':
-                    indexed_value = indexed_value.decode('utf-8').rstrip('\0')
+                current_index = self.index_attr - 1 
+                raw_value = unpacked_data[current_index]
                 
-                return indexed_value
+                # DETECCIÓN INTELIGENTE DE TIPOS:
                 
+                # CASO 1: POINT - Dos números consecutivos
+                if (current_index + 1 < len(unpacked_data) and 
+                    isinstance(raw_value, (int, float)) and
+                    isinstance(unpacked_data[current_index + 1], (int, float))):
+                    
+                    x_value = float(raw_value)
+                    y_value = float(unpacked_data[current_index + 1])
+                    point = Point(x_value, y_value)
+                    return point
+                
+                elif isinstance(raw_value, bytes):
+                    decoded_value = raw_value.decode('utf-8').rstrip('\x00').strip()
+                    return decoded_value
+                
+                else:
+                    return raw_value
+                    
         except FileNotFoundError:
-            print(f"Error: El archivo {self.filename} no existe.")
             return None
         except Exception as e:
-            print(f"Error al leer el atributo: {e}")
+            print(f"Error al leer atributo desde posición {position}: {e}")
             return None
 
     def hash_bin(self, value):
         """
         Genera el hash binario para un valor según su tipo.
+        VERSIÓN ACTUALIZADA que maneja objetos Point.
         """
-        # Determinar el tipo de dato que estamos indexando
-        field_type = self.field_types[self.index_attr - 1] if self.index_attr - 1 < len(self.field_types) else 'unknown'
+        # Obtener el tipo de dato del atributo usando metadatos
+        attribute_type = self._get_attribute_type(self.index_attr)
         
-        # Aplicar función hash según el tipo
-        if field_type == 'int':
-            hash_val = value % (2 ** D)
-        elif field_type == 'double':
-            # Para doubles, multiplicar por un factor y usar módulo
-            hash_val = int(value * 1000) % (2 ** D)
-        elif field_type == 'string' or field_type == 'char':
-            # Para strings, sumar códigos ASCII
-            hash_val = sum(ord(c) for c in str(value)) % (2 ** D)
+        if attribute_type == 'POINT':
+            if isinstance(value, Point):
+                distance = value.distance_to_origin()
+                hash_val = int(distance * 1000) % (2 ** D)
+            else:
+                hash_val = 0
         else:
-            # Para tipos desconocidos, usar un valor por defecto
-            hash_val = 0
+            field_type = self.field_types[self.index_attr - 1] if self.index_attr - 1 < len(self.field_types) else 'unknown'
+            
+            if field_type == 'int':
+                hash_val = value % (2 ** D)
+            elif field_type == 'double':
+                hash_val = int(value * 1000) % (2 ** D)
+            elif field_type == 'string' or field_type == 'char':
+                hash_val = sum(ord(c) for c in str(value)) % (2 ** D)
+            else:
+                hash_val = 0
         
-        # Convertir a binario y rellenar con ceros
         return bin(hash_val)[2:].zfill(D)
 
     def init_files(self):
@@ -220,7 +293,6 @@ class ExtendibleHashFile:
         hbin = self.hash_bin(value)
         
         self.load_index()
-        #print(f"Insertando registro {record_num}, valor: {value}, hash: {hbin}")
 
         # Empezamos con el hash completo y vamos recortando un bit a la vez desde la izquierda
         matching = None
@@ -230,13 +302,11 @@ class ExtendibleHashFile:
         while b:
             matching = next((e for e in self.index if e.prefix == b), None)
             if matching:
-                #print(f"Coincidencia encontrada con el prefijo: {b}")
                 break  # Salir si encontramos una coincidencia
             b = b[1:]  # Recortamos el primer bit del prefijo
 
         if matching:
             bucket_id = matching.bucket_id
-            #print(f"Bucket encontrado con ID {bucket_id} para el prefijo: {matching.prefix}")
 
             # Leer el bucket desde archivo
             bucket = self.read_bucket(bucket_id)
@@ -287,7 +357,6 @@ class ExtendibleHashFile:
                 while bucket.next != -1:
                     bucket_id = bucket.next
                     bucket = self.read_bucket(bucket_id)
-                    #print(f"Overflow encontrado, siguiendo al siguiente bucket: {bucket_id}")
                     if not bucket.is_full():
                         bucket.records.append(record_num)
                         self.write_bucket(bucket_id, bucket)
@@ -338,11 +407,11 @@ class ExtendibleHashFile:
     def search(self, search_value):
         """
         Busca registros que coincidan con el valor de búsqueda en el atributo indexado.
+        VERSIÓN ACTUALIZADA que maneja búsquedas con objetos Point.
         Retorna los números de registro que coinciden.
         """
         self.load_index()
         hbin = self.hash_bin(search_value)
-        #print(f"Buscando valor: {search_value}, hash: {hbin}")
 
         # Lista para almacenar los registros encontrados
         found_records = []
@@ -359,7 +428,6 @@ class ExtendibleHashFile:
         # Buscar en los buckets
         if matching:
             bucket_id = matching.bucket_id
-            #print(f"Bucket encontrado con ID {bucket_id} para el prefijo: {matching.prefix}")
             
             # Recorrer el bucket junto con su overflow
             while bucket_id != -1:
@@ -368,25 +436,24 @@ class ExtendibleHashFile:
                 # Para cada registro en el bucket, verificar si el valor coincide
                 for record_num in bucket.records:
                     value = self.get_attribute_from_record_num(record_num)
-                    if value == search_value:
-                        found_records.append(record_num)
-                        
-                        # Si es una clave y ya encontramos un registro, podemos salir
-                        if self.is_key and found_records:
-                            return found_records
+                    
+                    # Usar las operaciones sobrecargadas para comparar
+                    try:
+                        if value == search_value:
+                            found_records.append(record_num)
+                            
+                            # Si es una clave y ya encontramos un registro, podemos salir
+                            if self.is_key and found_records:
+                                return found_records
+                    except TypeError:
+                        # Si la comparación falla, convertir a string y comparar
+                        if str(value) == str(search_value):
+                            found_records.append(record_num)
+                            if self.is_key and found_records:
+                                return found_records
                             
                 bucket_id = bucket.next  # Seguir al siguiente bucket si hay overflow
 
-        # Imprimir resultados
-        if found_records:
-            #print(f"Se encontraron {len(found_records)} registros con el valor '{search_value}':")
-            for record_num in found_records:
-                value = self.get_attribute_from_record_num(record_num)
-                position = self._get_record_position(record_num)
-                #print(f"  - Registro {record_num}, posición {position}, valor: {value}")
-        else:
-            print(f"No se encontraron registros con el valor '{search_value}'.")
-            
         return found_records  # Devolvemos los números de registro
     
     def range_search(self, min_value, max_value):
@@ -401,8 +468,6 @@ class ExtendibleHashFile:
         Returns:
             dict: Diccionario con error indicando que no se soporta
         """
-        #print(f"Intento de búsqueda por rango en índice hash: [{min_value}, {max_value}]")
-        
         # Los índices hash no soportan búsquedas por rango eficientes
         error_response = {
             "error": True,
@@ -414,8 +479,8 @@ class ExtendibleHashFile:
             "range": [min_value, max_value]
         }
         
-        #print(f"ERROR: {error_response['message']}")
         return error_response
+
     def delete_record(self, record_num):
         """
         Elimina un registro específico del índice hash.
@@ -431,7 +496,6 @@ class ExtendibleHashFile:
         hbin = self.hash_bin(value)
         
         self.load_index()
-        #print(f"Eliminando registro {record_num}, valor: {value}, hash: {hbin}")
 
         # Buscar el prefijo coincidente
         matching = None
@@ -439,13 +503,11 @@ class ExtendibleHashFile:
         while b:
             matching = next((e for e in self.index if e.prefix == b), None)
             if matching:
-                #print(f"Coincidencia encontrada con el prefijo: {b}")
                 break
             b = b[1:]
 
         if matching:
             bucket_id = matching.bucket_id
-            #print(f"Bucket encontrado con ID {bucket_id} para el prefijo: {matching.prefix}")
 
             # Leer el bucket desde archivo
             bucket = self.read_bucket(bucket_id)
@@ -453,13 +515,11 @@ class ExtendibleHashFile:
             # Eliminar el registro si existe en el bucket
             if record_num in bucket.records:
                 bucket.records.remove(record_num)
-                #print(f"Registro {record_num} eliminado del bucket {bucket_id}.")
                 self.write_bucket(bucket_id, bucket)
                 
                 # Reorganizar overflow si es necesario
                 bucket_next_t = bucket.next
                 while bucket_next_t != -1:
-                    #print("Reorganizando overflow...")
                     actual_bucket = self.read_bucket(bucket_next_t)
                     if actual_bucket.records:
                         bucket.records.append(actual_bucket.records.pop(0))
@@ -480,7 +540,6 @@ class ExtendibleHashFile:
                     current_bucket = self.read_bucket(current_bucket_id)
                     if record_num in current_bucket.records:
                         current_bucket.records.remove(record_num)
-                        #rint(f"Registro {record_num} eliminado del bucket de overflow {current_bucket_id}.")
                         self.write_bucket(current_bucket_id, current_bucket)
                         
                         # Si el bucket de overflow quedó vacío, actualizar enlaces

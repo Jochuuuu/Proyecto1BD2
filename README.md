@@ -158,7 +158,7 @@ BD2/
 - Ideal para búsquedas exactas O(1)
 - No soporta búsquedas por rango
 
-#### **R-Tree (rtree_file.py)**  
+#### **R-Tree (rtreee.py)**  
 - **Índice espacial 2D** basado en librería rtree de Python
 - **R*-tree variant** con optimizaciones avanzadas
 - **Cache inteligente** de objetos Point para rendimiento
